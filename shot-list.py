@@ -37,7 +37,7 @@ import os
 import sys
 import math
 import argparse
-import dotenv, json
+import json
 from collections import defaultdict, namedtuple
 
 # Resolve API
@@ -134,7 +134,17 @@ def safe_get(d, k, default=None):
 def subtitle_text(item):
     # Prefer subtitle "Text" if exposed, else name
     props = item.GetProperty() or {}
-    return safe_get(props, "Text", item.GetName() or "").strip()
+    text = safe_get(props, "Text", item.GetName() or "").strip()
+    
+    # Extract just the shot code (first non-whitespace token)
+    # Split by newline, space, or tab and take the first part
+    if text:
+        # Split by any whitespace (space, tab, newline, etc.)
+        parts = text.split()
+        if parts:
+            return parts[0]
+    
+    return text
 
 def element_name_for_track(idx):
     if idx == 1:
@@ -531,7 +541,6 @@ def main():
 
         if args.shotgun:
             # Fetch Shotgun configuration
-            dotenv.load_dotenv('.env')
             sg_config = json.load(open(os.path.join(os.path.expanduser('~'), "config/sg_plugins/api.json"), 'r'))
             SERVER_PATH = sg_config["SERVER_PATH"]
             SCRIPT_USER = sg_config["SCRIPT_USER"]
