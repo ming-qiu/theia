@@ -42,7 +42,7 @@ from collections import defaultdict, namedtuple
 
 # Resolve API
 try:
-    import DaVinciResolveScript as bmd
+    import DaVinciResolveScript as dvr
 except Exception as e:
     print("ERROR: Could not import DaVinciResolveScript. Run from Resolve's Python.", file=sys.stderr)
     raise
@@ -77,7 +77,7 @@ def parse_args():
     return p.parse_args()
 
 def resolve_app():
-    app = bmd.scriptapp("Resolve")
+    app = dvr.scriptapp("Resolve")
     if not app:
         raise RuntimeError("Could not acquire Resolve app. Run inside Resolve.")
     return app

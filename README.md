@@ -2,6 +2,16 @@
 
 A collection of Python scripts for exporting shot information and VFX data from DaVinci Resolve timelines.
 
+**Note: These scripts require DaVinci Resolve Studio. The free version does not include the scripting API.**
+
+## Prep Your Resolve
+
+Before anything please make sure the Scripting API of your DaVinci Resolve Studio works.
+
+In Resolve, go to `Help -> Documentation -> Developer`. In the directory that pops up, go to Scripting. You will find a README.txt, which will guide you through the API setup.
+
+_Throw the txt into any LLM to format it better._
+
 ## Quick Start (5 Minutes)
 
 ### 1. Install Dependencies
@@ -17,14 +27,14 @@ chmod +x install_dependencies.sh
 install_dependencies.bat
 ```
 
-The installer will automatically find your DaVinci Resolve Python and install everything needed.
+The installer will use your system Python and install all required packages.
 
 ### 2. Try a Clip Inventory
 
 In Resolve, open any timeline with only 1 video track, go to the Color page in Resolve, then:
 
 ```bash
-python clip-inventory.py my_inventory.xlsx
+python3 clip-inventory.py my_inventory.xlsx
 ```
 
 That's it! You'll have an inventory of clips with thumbnails.
@@ -39,7 +49,7 @@ Works with timelines with only 1 video track. Exports all clips from video track
 
 **Quick Usage:**
 ```bash
-python clip-inventory.py my_inventory.xlsx
+python3 clip-inventory.py my_inventory.xlsx
 ```
 
 **What You Get:**
@@ -62,7 +72,7 @@ Reads VFX shot codes from Excel and creates an SRT subtitle file for import.
 
 **Quick Usage:**
 ```bash
-python shot-code-vfx-work.py my_inventory.xlsx
+python3 shot-code-vfx-work.py my_inventory.xlsx
 ```
 
 **Workflow:**
@@ -85,20 +95,21 @@ Creates detailed shot and element breakdown with optional ShotGrid sync.
 
 **Quick Usage:**
 ```bash
-python shot-list.py --output shot_list.xlsx
+python3 shot-list.py --output shot_list.xlsx
 ```
 
 **Advanced Usage:**
 ```bash
 # Specify timeline and handles
-python shot-list.py --timeline "master" --work-handle 12 --scan-handle 48 --output vfx_shots.xlsx
+python3 shot-list.py --timeline "master" --work-handle 12 --scan-handle 48 --output vfx_shots.xlsx
 
 # With ShotGrid sync and editorial change report
-python shot-list.py --shotgun --output vfx_shots.xlsx
+python3 shot-list.py --shotgun --output vfx_shots.xlsx
 ```
 
-🫨 **Half-frame Problem and the Workaround:**
-Sometimes the Resolve API can return clip start and end times that are a half frame more than the actual value, causing precision problems when calculating retimes etc.. For example, on a 25 fps timeline, when the clip starts at 21:35:14:04, the API could read a clip start time of 77516.81999999999 (seconds), while the correct number should be 77516.8. The API's reading is off by 0.5 * 1 / 25 second = 0.02 frame. This only happens to some projects, and it's unclear what leads to this problem.
+**Half-frame Problem and the Workaround:**
+
+Sometimes the Resolve API can return clip start and end times that are a half frame more than the actual value, causing precision problems when calculating retimes etc. For example, on a 25 fps timeline, when the clip starts at 21:35:14:04, the API could read a clip start time of 77516.81999999999 (seconds), while the correct number should be 77516.8. The API's reading is off by 0.5 * 1 / 25 second = 0.02 frame. This only happens to some projects, and it's unclear what leads to this problem.
 
 The current workaround is the `--half-frame` flag. The script will print all clips' start times to your terminal. If those numbers are a half frame `(0.5 * 1 / fps)` off, rerun the script with the `--half-frame` flag. To check if the numbers are off, you can pick a clip in Resolve that starts at HH:MM:SS:00, and see if the corresponding clip start time in your terminal is an integer.
 
@@ -148,7 +159,7 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 
 ### Workflow 1: Add VFX shot codes and VFX work as subtitles
 
-**Goal:** Document which shot are VFX shots, give them names, and optionally document the work required.
+**Goal:** Document which shots are VFX shots, give them names, and optionally document the work required.
 
 1. **In Resolve:**
    - Consolidate all shots to video track 1
@@ -156,7 +167,7 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 
 2. **Export Clips:**
    ```bash
-   python clip-inventory.py all_shots.xlsx
+   python3 clip-inventory.py all_shots.xlsx
    ```
 
 3. **Review & Assign:**
@@ -167,7 +178,7 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 
 4. **Import as Subtitles:**
    ```bash
-   python shot-code-vfx-work.py all_shots.xlsx
+   python3 shot-code-vfx-work.py all_shots.xlsx
    ```
 
 5. **In Resolve:**
@@ -183,14 +194,13 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 
 2. **Export:**
    ```bash
-   python shot-list.py --output project_vfx_shots.xlsx
+   python3 shot-list.py --output project_vfx_shots.xlsx
    ```
 
 3. **Review:**
    - Open Excel file
    - Check "Shots" sheet for overall shot info
    - Check "Elements" sheet for per-clip details
-
 
 ### Workflow 3: ShotGrid-Tracked Editorial Changes
 
@@ -204,14 +214,14 @@ The current workaround is the `--half-frame` flag. The script will print all cli
    - SCRIPT_KEY can also be stored as an environment variable of your computer
 
 2. **In Resolve:**
-   - Project name should be the same as the project's code in Shotgrid
+   - Project name should be the same as the project's code in ShotGrid
 
-2. **Export with ShotGrid Sync:**
+3. **Export with ShotGrid Sync:**
    ```bash
-   python shot-list.py --shotgun --output updated_cut.xlsx
+   python3 shot-list.py --shotgun --output updated_cut.xlsx
    ```
 
-3. **Review Changes:**
+4. **Review Changes:**
    - "Change to Cut" column shows In/Out frame differences
    - Positive = moved to the right on timeline, Negative = moved to the left on timeline
 
@@ -220,29 +230,34 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 ## Installation Details
 
 ### Prerequisites
-- **DaVinci Resolve** (Studio or Free)
-- **Python 3.6+** (comes with Resolve)
+- **DaVinci Resolve Studio** (scripting API not available in free version)
+- **Python 3.6+** installed on your system
 
 ### What Gets Installed
-The installer adds these Python packages to Resolve's Python:
+The installer adds these Python packages to your system Python:
 - `openpyxl` - Excel file creation
 - `Pillow` - Image processing for thumbnails
 - `timecode` - Timecode calculations
 - `shotgun-api3` - ShotGrid integration (optional)
+- `python-dotenv` - Environment configuration
 
 ### Manual Installation
 
 If the automatic installer doesn't work:
 
-**Find Resolve's Python:**
-- macOS: `/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Frameworks/Python.framework/Versions/3.6/bin/python3`
-- Windows: `C:\Program Files\Blackmagic Design\DaVinci Resolve\python.exe`
-- Linux: `/opt/resolve/bin/python`
-
-**Install dependencies:**
 ```bash
-/path/to/resolve/python -m pip install -r requirements.txt
+# macOS/Linux
+python3 -m pip install -r requirements.txt
+
+# Windows
+python -m pip install -r requirements.txt
 ```
+
+### Don't Have Python Installed?
+
+Download and install Python from [python.org](https://www.python.org/downloads/)
+
+**Windows users:** Make sure to check "Add Python to PATH" during installation!
 
 ---
 
@@ -250,9 +265,9 @@ If the automatic installer doesn't work:
 
 ### "Could not import DaVinci Resolve API"
 **Solution:** 
-- Make sure Resolve is running
-- Use Resolve's Python, not system Python
-- Check that scripts are being run from within Resolve's Python environment
+- Ensure DaVinci Resolve Studio is running (not the free version)
+- The Resolve API only works when Resolve is open and running
+- Verify the API is properly set up (see "Prep Your Resolve" section)
 
 ### "No project is currently open"
 **Solution:** Open a project in DaVinci Resolve before running scripts
@@ -273,7 +288,7 @@ If the automatic installer doesn't work:
 ### ShotGrid Connection Issues
 **Solution:**
 - Verify `.env` file exists with correct `SCRIPT_KEY`
-- Check `~/config/sg_plugins/api.json` exists and contains valid credentials
+- Check `api.json` exists and contains valid credentials
 - Test ShotGrid connection separately
 - Ensure project code in Resolve matches ShotGrid project
 
@@ -281,8 +296,8 @@ If the automatic installer doesn't work:
 **Solution:**
 - Check internet connection (pip needs to download packages)
 - Try manual installation command
-- Ensure you have write permissions to Resolve's Python directory
-- On macOS/Linux, you may need `sudo` for some Python installations
+- Ensure you have write permissions for Python package installation
+- On macOS/Linux, you may need to use `pip3` instead of `pip`
 
 ---
 
@@ -306,7 +321,7 @@ The scripts detect:
 ### Scale & Repo Presentation
 
 - **Scale**: The script detects the Zoom X value at the in point of the clip. Keyframed scale not documented precisely at this time
-- **Repo**: Not available at this time :( Stay tuned for updates
+- **Repo**: Not available at this time. Stay tuned for updates
 
 ### Track Naming Convention
 
@@ -359,11 +374,11 @@ resolve-vfx-scripts/
 
 For issues or questions:
 1. Check this README's troubleshooting section
-2. Verify all prerequisites (Resolve running, project/timeline open)
+2. Verify all prerequisites (Resolve Studio running, project/timeline open)
 3. Confirm dependencies are installed (re-run installer if needed)
 
 ---
 
 ## License & Credits
 
-These scripts use the DaVinci Resolve API and require DaVinci Resolve to be installed and running.
+These scripts use the DaVinci Resolve API and require DaVinci Resolve Studio to be installed and running.

@@ -1,59 +1,50 @@
 @echo off
 REM Installation script for DaVinci Resolve VFX Pipeline Scripts
-REM This script installs required Python dependencies using Resolve's Python
+REM This script installs required Python dependencies using your system Python
 
 echo ================================================
 echo DaVinci Resolve VFX Scripts - Dependency Installer
 echo ================================================
 echo.
 
-REM Common Resolve Python locations
-set "RESOLVE_PYTHON=C:\Program Files\Blackmagic Design\DaVinci Resolve\python.exe"
-set "RESOLVE_PYTHON_ALT=C:\Program Files\Blackmagic Design\DaVinci Resolve Studio\python.exe"
-
-REM Check if Resolve Python exists
-if exist "%RESOLVE_PYTHON%" (
-    goto :found_python
+REM Check if python is available
+where python >nul 2>nul
+if %errorlevel% neq 0 (
+    echo Error: Python not found in PATH
+    echo.
+    echo Please install Python 3.6 or later and try again.
+    echo Visit: https://www.python.org/downloads/
+    echo.
+    echo Make sure to check "Add Python to PATH" during installation.
+    pause
+    exit /b 1
 )
 
-if exist "%RESOLVE_PYTHON_ALT%" (
-    set "RESOLVE_PYTHON=%RESOLVE_PYTHON_ALT%"
-    goto :found_python
-)
+set "PYTHON_CMD=python"
 
-echo Error: Could not find DaVinci Resolve Python at:
-echo   %RESOLVE_PYTHON%
-echo   %RESOLVE_PYTHON_ALT%
-echo.
-echo Please locate your Resolve Python installation and run:
-echo   "C:\Path\To\Resolve\python.exe" -m pip install -r requirements.txt
-pause
-exit /b 1
-
-:found_python
-echo Found DaVinci Resolve Python at:
-echo   %RESOLVE_PYTHON%
+echo Found Python at:
+where python
 echo.
 
 REM Check Python version
 echo Python version:
-"%RESOLVE_PYTHON%" --version
+%PYTHON_CMD% --version
 echo.
 
 REM Ensure pip is installed
 echo Ensuring pip is installed...
-"%RESOLVE_PYTHON%" -m ensurepip --default-pip 2>nul
+%PYTHON_CMD% -m ensurepip --default-pip 2>nul
 
 REM Upgrade pip
 echo Upgrading pip...
-"%RESOLVE_PYTHON%" -m pip install --upgrade pip
+%PYTHON_CMD% -m pip install --upgrade pip
 
 echo.
 echo Installing dependencies from requirements.txt...
 echo.
 
 REM Install requirements
-"%RESOLVE_PYTHON%" -m pip install -r requirements.txt
+%PYTHON_CMD% -m pip install -r requirements.txt
 
 if %errorlevel% equ 0 (
     echo.
@@ -72,7 +63,7 @@ if %errorlevel% equ 0 (
     echo ================================================
     echo.
     echo Please try installing manually:
-    echo   "%RESOLVE_PYTHON%" -m pip install -r requirements.txt
+    echo   python -m pip install -r requirements.txt
     echo.
 )
 
