@@ -8,6 +8,7 @@ import base64
 import time
 from io import BytesIO
 from timecode import Timecode
+import time
 
 try:
     from openpyxl import Workbook
@@ -34,6 +35,8 @@ except ImportError:
 def get_resolve_objects():
     """Initialize and return Resolve API objects."""
     resolve = dvr.scriptapp("Resolve")
+    starting_page = resolve.GetCurrentPage()
+
     if not resolve:
         print("Error: Could not connect to DaVinci Resolve")
         sys.exit(1)
@@ -48,8 +51,16 @@ def get_resolve_objects():
     if not timeline:
         print("Error: No timeline is currently open")
         sys.exit(1)
+
+    try:
+        print ("Opening Color page...")
+        resolve.OpenPage('color')
+        time.sleep(1)
+    except:
+        print ("Error: Cannot go to Color page")
+        sys.exit(1)
     
-    return resolve, project, timeline
+    return resolve, project, timeline, resolve, starting_page
 
 
 def get_clip_thumbnail(resolve, project, timeline, clip, timeline_fps):
@@ -115,7 +126,7 @@ def export_cuts_to_excel(output_path):
     """Main function to export timeline cuts to Excel."""
     
     print("Connecting to DaVinci Resolve...")
-    resolve, project, timeline = get_resolve_objects()
+    resolve, project, timeline, resolve, starting_page = get_resolve_objects()
     
     timeline_name = timeline.GetName()
     timeline_fps = float(timeline.GetSetting("timelineFrameRate"))
@@ -150,6 +161,7 @@ def export_cuts_to_excel(output_path):
     ws['F1'] = "Source TC In"
     ws['G1'] = "VFX Shot Code"
     ws['H1'] = "VFX Work"
+    ws['I1'] = "Vendor"
     
     # Set column widths
     ws.column_dimensions['A'].width = 34
@@ -160,6 +172,7 @@ def export_cuts_to_excel(output_path):
     ws.column_dimensions['F'].width = 15
     ws.column_dimensions['G'].width = 15
     ws.column_dimensions['H'].width = 15
+    ws.column_dimensions['I'].width = 15
     
     # Process each clip
     for idx, clip in enumerate(clips, start=1):
@@ -236,6 +249,8 @@ def export_cuts_to_excel(output_path):
     print(f"\nSaving Excel file to: {output_path}")
     wb.save(output_path)
     print("Export complete!")
+
+    resolve.OpenPage(starting_page)
 
 
 if __name__ == "__main__":

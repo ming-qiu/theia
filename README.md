@@ -31,7 +31,7 @@ The installer will use your system Python and install all required packages.
 
 ### 2. Try a Clip Inventory
 
-In Resolve, open any timeline with only 1 video track, go to the Color page in Resolve, then:
+In Resolve, open any timeline with only 1 video track, then:
 
 ```bash
 python3 clip-inventory.py my_inventory.xlsx
@@ -43,9 +43,9 @@ That's it! You'll have an inventory of clips with thumbnails.
 
 ## Scripts Overview
 
-### `clip-inventory.py` - Clip Export with Thumbnails
+### `clip-inventory.py` - Cut Point Export with Thumbnails
 
-Works with timelines with only 1 video track. Exports all clips from video track 1 with thumbnails to Excel.
+Exports the Record In, Record Out, and Source In timcodes of all shots with thumbnails to an Excel sheet.
 
 **Quick Usage:**
 ```bash
@@ -57,10 +57,10 @@ python3 clip-inventory.py my_inventory.xlsx
 - Reel names
 - Record TC In/Out (timeline positions)
 - Source TC (original media timecode)
-- Empty columns for VFX Shot Code and VFX Work (fill in manually)
+- Empty columns for VFX Shot Code, VFX Work, and Vendor (fill in manually)
 
 **When to Use:**
-- Need visual reference of all clips
+- Need visual reference of all shots
 - Creating a clip inventory for review
 - Preparing to assign VFX shot codes
 
@@ -163,7 +163,6 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 
 1. **In Resolve:**
    - Consolidate all shots to video track 1
-   - Go to the Color page
 
 2. **Export Clips:**
    ```bash
@@ -281,9 +280,6 @@ Download and install Python from [python.org](https://www.python.org/downloads/)
 **Solution:** 
 - For `shot-list.py`: Add shot codes to a subtitle track
 - Each subtitle item defines one shot's time span
-
-### Missing Thumbnails (clip-inventory.py)
-**Solution:** Make sure you are on the Color page in Resolve when running the script
 
 ### ShotGrid Connection Issues
 **Solution:**
