@@ -31,10 +31,10 @@ The installer will use your system Python and install all required packages.
 
 ### 2. Try a Clip Inventory
 
-In Resolve, open any timeline with only 1 video track, then:
+In Resolve, open any timeline with clips on video track 1, then:
 
 ```bash
-python3 clip-inventory.py my_inventory.xlsx
+python3 clip-inventory.py
 ```
 
 That's it! You'll have an inventory of clips with thumbnails.
@@ -47,9 +47,11 @@ That's it! You'll have an inventory of clips with thumbnails.
 
 Exports the Record In, Record Out, and Source In timcodes of all shots with thumbnails to an Excel sheet.
 
+The script uses all the cut points of one track to determine what is a shot. By default it looks at video track 1. You can use the --bg-track flag to specify a different track.
+
 **Quick Usage:**
 ```bash
-python3 clip-inventory.py my_inventory.xlsx
+python3 clip-inventory.py --file-name my_inventory.xlsx --bg-track 2
 ```
 
 **What You Get:**
