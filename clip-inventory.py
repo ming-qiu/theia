@@ -9,6 +9,7 @@ import time
 from io import BytesIO
 from timecode import Timecode
 import time
+import argparse
 
 try:
     from openpyxl import Workbook
@@ -31,6 +32,12 @@ except ImportError:
     print("Error: Could not import DaVinci Resolve API")
     sys.exit(1)
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Create an inventory of BG clips")
+    parser.add_argument("--file-name", default = "clip_inventory.xlsx", help="Output file name")
+    parser.add_argument("--bg-track", default = 1, help = "Track number of the BG track")
+    return parser.parse_args()
 
 def get_resolve_objects():
     """Initialize and return Resolve API objects."""
@@ -85,6 +92,7 @@ def get_clip_thumbnail(resolve, project, timeline, clip, timeline_fps):
         # Grab the thumbnail
         print(f"    Attempting to grab thumbnail...")
         thumb_data = timeline.GetCurrentClipThumbnailImage()
+        thumb_data = timeline.GrabStill()
         
         if not thumb_data:
             print(f"    Warning: GetCurrentClipThumbnailImage returned None")
@@ -122,7 +130,7 @@ def get_clip_thumbnail(resolve, project, timeline, clip, timeline_fps):
         return None
 
 
-def export_cuts_to_excel(output_path):
+def export_cuts_to_excel(output_path, bg_track):
     """Main function to export timeline cuts to Excel."""
     
     print("Connecting to DaVinci Resolve...")
@@ -137,11 +145,11 @@ def export_cuts_to_excel(output_path):
     print(f"Start Frame: {timeline_start_frame}")
     
     # Get all clips from video track 1
-    print("\nGetting clips from video track 1...")
-    clips = timeline.GetItemListInTrack("video", 1)
+    print(f"\nGetting clips from video track {bg_track}...")
+    clips = timeline.GetItemListInTrack("video", bg_track)
     
     if not clips:
-        print("Error: No clips found on video track 1")
+        print(f"Error: No clips found on video track {bg_track}")
         return
     
     print(f"Found {len(clips)} clips")
@@ -255,10 +263,8 @@ def export_cuts_to_excel(output_path):
 
 if __name__ == "__main__":
     # Default output path - modify as needed
-    output_file = "clip_inventory.xlsx"
+    args = parse_args()
+    output_file = args.file_name
+    bg_track = int(args.bg_track)
     
-    # You can pass output path as command line argument
-    if len(sys.argv) > 1:
-        output_file = sys.argv[1]
-    
-    export_cuts_to_excel(output_file)
+    export_cuts_to_excel(output_file, bg_track)
