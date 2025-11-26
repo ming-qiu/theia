@@ -3,12 +3,14 @@ import sys
 import argparse
 from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
 from PIL import Image, ImageDraw, ImageFont
+import subprocess
+import timecode
 
 def generate_frame_counter(begin, end, fps, output_dir, font_path):
     """Generate frame counter images and video for specified FPS."""
     
     # Create FPS-specific subdirectory
-    fps_label = str(fps).replace('.', '_')
+    fps_label = str(fps).replace('.', '_').replace('_0', '')
     frame_output_path = os.path.join(output_dir, f'frames_{fps_label}fps')
     
     if not os.path.exists(frame_output_path):
@@ -30,22 +32,50 @@ def generate_frame_counter(begin, end, fps, output_dir, font_path):
     # Generate video
     print(f"Creating video for {fps} fps from frame {begin} to frame {end}...")
     clip = ImageSequenceClip(frame_output_path, fps=fps)
-    video_path = os.path.join(output_dir, f'frame_counter_{fps_label}fps.mp4')
-    clip.write_videofile(video_path, fps=fps)
     
-    print(f"Completed video: {video_path}\n")
-
+    # Create temporary video without timecode
+    temp_video_path = os.path.join(output_dir, f'temp_{fps_label}fps.mp4')
+    clip.write_videofile(temp_video_path, fps=fps)
+    
+    # Calculate starting timecode using timecode package
+    tc = timecode.Timecode(fps, frames=begin) + 1
+    start_timecode = str(tc)
+    print(f"Setting starting timecode to: {start_timecode}")
+    
+    # Add timecode metadata using ffmpeg
+    video_path = os.path.join(output_dir, f'frame_counter_{fps_label}fps.mp4')
+    
+    ffmpeg_cmd = [
+        'ffmpeg', '-i', temp_video_path,
+        '-c', 'copy',  # Copy streams without re-encoding
+        '-timecode', start_timecode,
+        '-y',  # Overwrite output file
+        video_path
+    ]
+    
+    try:
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+        print(f"Completed video with timecode metadata: {video_path}\n")
+        # Remove temporary file
+        os.remove(temp_video_path)
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Failed to add timecode metadata. Using video without timecode.")
+        print(f"Error: {e.stderr.decode()}")
+        # If ffmpeg fails, just rename the temp file
+        os.rename(temp_video_path, video_path)
+    
+    # Clean up frame directory
     if os.path.isdir(frame_output_path):
         shutil.rmtree(frame_output_path)
 
 def main():
     parser = argparse.ArgumentParser(description='Generate frame counter videos at multiple frame rates')
-    parser.add_argument('-begin', type=int, default = 0, help='Starting frame number, default is 0')
-    parser.add_argument('-end', type=int, default = 4000, help='Ending frame number, default is 4000')
-    parser.add_argument('-fps', type=float, default = 24, help='Frame rate, default is 24')
-    parser.add_argument('-dest', type=str, default='./frame-counters', 
-                        help='Output directory (default: output)')
-    parser.add_argument('-font', type=str, default='./SF-Pro-Text-Regular.otf',
+    parser.add_argument('--begin', type=int, default = 0, help='Starting frame number, default is 0')
+    parser.add_argument('--end', type=int, default = 4000, help='Ending frame number, default is 4000')
+    parser.add_argument('--fps', type=float, default = 24, help='Frame rate, default is 24')
+    parser.add_argument('--dest', type=str, default='./frame-counters', 
+                        help='Output directory (default: ./frame-counters)')
+    parser.add_argument('--font', type=str, default='./SF-Pro-Text-Regular.otf',
                         help='Path to font file (default: ./SF-Pro-Text-Regular.otf)')
     
     args = parser.parse_args()
@@ -54,13 +84,11 @@ def main():
     if not os.path.exists(args.dest):
         os.makedirs(args.dest)
     
-    # Generate frame counters for each FPS
-    fps = args.fps
-    
+    # Generate frame counter
     generate_frame_counter(
         args.begin,
         args.end,
-        fps,
+        args.fps,
         args.dest,
         args.font
     )

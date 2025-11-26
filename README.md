@@ -47,7 +47,7 @@ That's it! You'll have an inventory of clips with thumbnails.
 
 Exports the Record In, Record Out, and Source In timcodes of all shots with thumbnails to an Excel sheet.
 
-The script uses all the cut points of one track to determine what is a shot. By default it looks at video track 1. You can use the --bg-track flag to specify a different track.
+The script uses all the cut points of one track to determine what is a shot. By default it looks at video track 1. You can use the `--bg-track` flag to specify a different track.
 
 **Quick Usage:**
 ```bash
@@ -68,21 +68,24 @@ python3 clip-inventory.py --file-name my_inventory.xlsx --bg-track 2
 
 ---
 
-### `shot-code-vfx-work.py` - Import Shot Codes and VFX Work as Subtitles
+### `shot-code-vfx-work.py` - Add Frame Counter and Import Shot Codes and VFX Work as Subtitles
 
-Reads VFX shot codes from Excel and creates an SRT subtitle file for import.
+Adds frame counters to all the shots specified in the Excel sheet, and creates SRT subtitle files for import.
+
+Use the `--fps`, `--frame-counter`, and `--first-frame` flags to pass the timeline's fps, the path to the frame counter video, and the first frame number of the counter for your shot.
 
 **Quick Usage:**
 ```bash
-python3 shot-code-vfx-work.py my_inventory.xlsx
+python3 shot-code-vfx-work.py --excel ./clip_list.xlsx --fps 24 --frame-counter ./frame-counters/frame_counter_24fps.mp4 --first-frame 1009
 ```
 
 **Workflow:**
-1. (Export clips using `clip-inventory.py`)
-2. Fill in Column G (VFX Shot Code) in the Excel file
-3. Optionally fill Column H (VFX Work) with descriptions
-4. Run this script to generate an SRT file
-5. Import the generated SRT file into Resolve
+1. (Export clip info using `clip-inventory.py`)
+2. (Fill in Column G and the likes in the Excel file)
+3. (Generate frame counters using `frame-counter.py`)
+4. Run this script to add frame counters and generate SRT files
+5. Import the generated SRT files into Resolve
+6. Adjust the size and position of the frame counter
 
 **What It Does:**
 - Reads columns D (Record TC In), E (Record TC Out), G (VFX Shot Code), H (VFX Work)

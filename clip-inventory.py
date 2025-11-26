@@ -92,7 +92,6 @@ def get_clip_thumbnail(resolve, project, timeline, clip, timeline_fps):
         # Grab the thumbnail
         print(f"    Attempting to grab thumbnail...")
         thumb_data = timeline.GetCurrentClipThumbnailImage()
-        thumb_data = timeline.GrabStill()
         
         if not thumb_data:
             print(f"    Warning: GetCurrentClipThumbnailImage returned None")
