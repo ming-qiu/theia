@@ -29,7 +29,7 @@ install_dependencies.bat
 
 The installer will use your system Python and install all required packages.
 
-### 2. Try a Clip Inventory
+### 2. Create a Clip Inventory
 
 In Resolve, open any timeline with clips on video track 1, then:
 
@@ -39,15 +39,16 @@ python3 clip-inventory.py
 
 That's it! You'll have an inventory of clips with thumbnails.
 
----
 
 ## Scripts Overview
 
-### `clip-inventory.py` - Cut Point Export with Thumbnails
+### `clip-inventory.py` - Export Clip Lists with Thumbnails
 
-Exports the Record In, Record Out, and Source In timcodes of all shots with thumbnails to an Excel sheet.
+Exports the Record In, Record Out, and Source In timcodes of all clips on one track with thumbnails to an Excel spreadsheet.
 
-The script uses all the cut points of one track to determine what is a shot. By default it looks at video track 1. You can use the `--bg-track` flag to specify a different track.
+**Options:**
+- `--bg-track` Track number of the BG track (default: 1)
+- `--file-name` Output file name (default: clip_inventory.xlsx)
 
 **Quick Usage:**
 ```bash
@@ -55,44 +56,64 @@ python3 clip-inventory.py --file-name my_inventory.xlsx --bg-track 2
 ```
 
 **What You Get:**
-- Thumbnail image for each clip
+- Thumbnail image
 - Reel names
 - Record TC In/Out (timeline positions)
 - Source TC (original media timecode)
-- Empty columns for VFX Shot Code, VFX Work, and Vendor (fill in manually)
+- Empty columns for shot metadata such as VFX Shot Code, VFX Work, and Vendor (fill in manually)
 
 **When to Use:**
 - Need visual reference of all shots
 - Creating a clip inventory for review
 - Preparing to assign VFX shot codes
 
----
+### `frame-counter.py` - Generate Frame Counter Videos
 
-### `shot-code-vfx-work.py` - Add Frame Counter and Import Shot Codes and VFX Work as Subtitles
+Generate an mp4 video that counts frame numbers.
 
-Adds frame counters to all the shots specified in the Excel sheet, and creates SRT subtitle files for import.
-
-Use the `--fps`, `--frame-counter`, and `--first-frame` flags to pass the timeline's fps, the path to the frame counter video, and the first frame number of the counter for your shot.
+**Options:**
+- `--w` Width of the frame counter video (default: 160)
+- `--h` Height of the frame counter video (default: 80)
+- `--begin` Beginning frame number (default: 1009)
+- `--end` Ending frame number (default: 2000)
+- `--fps` Frame rate (default: 24)
+- `--dest` Output directory of the frame counter (default: ./frame-counters)
+- `--font` Path to font file (default: ./SF-Pro-Text-Regular.otf)
 
 **Quick Usage:**
 ```bash
-python3 shot-code-vfx-work.py --excel ./clip_list.xlsx --fps 24 --frame-counter ./frame-counters/frame_counter_24fps.mp4 --first-frame 1009
+python3 frame-counter.py --begin 1001 --end 2300 --fps 25
+```
+
+**When to Use:**
+- Need a frame counter for shots
+
+### `shot-metadata.py` - Generate Shot Metadata Subtitles
+
+Takes a clip inventory sheet, and exports all the metadata columns as subtitles.
+Option to add frame counters to all the shots specified in the sheet.
+
+**Options:**
+- `--sheet` Excel sheet that contains metadata (default: clip_inventory.xlsx)
+- `--metadata-from` Export metadata from which column (default: G)
+- `--metadata-to` Export metadata to which column (default: G)
+- `--frame-counter` Path to frame counter video file
+- `--first-frame` Starting frame number for frame counters
+- `--fps` Timeline FPS (default: 24)
+
+
+**Quick Usage:**
+```bash
+python3 shot-metadata.py --excel ./shot_list.xlsx --metadata-from G --metadata-to I --frame-counter ./frame-counters/frame_counter_24fps.mp4 --first-frame 1009 --fps 24
 ```
 
 **Workflow:**
 1. (Export clip info using `clip-inventory.py`)
-2. (Fill in Column G and the likes in the Excel file)
+2. (Fill shot metadata into Excel file)
 3. (Generate frame counters using `frame-counter.py`)
 4. Run this script to add frame counters and generate SRT files
 5. Import the generated SRT files into Resolve
 6. Adjust the size and position of the frame counter
-
-**What It Does:**
-- Reads columns D (Record TC In), E (Record TC Out), G (VFX Shot Code), H (VFX Work)
-- Creates properly formatted SRT subtitle file
-- Multi-line subtitles if VFX Work is provided
-
----
 
 ### `shot-list.py` - Comprehensive VFX Shot List
 
@@ -158,8 +179,6 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 - Any reference track should be named "ref" in Resolve and will be ignored by the script
 - Subtitle track must contain shot codes (one subtitle item per shot defines the shot span)
 
----
-
 ## Common Workflows
 
 ### Workflow 1: Add VFX shot codes and VFX work as subtitles
@@ -182,7 +201,7 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 
 4. **Import as Subtitles:**
    ```bash
-   python3 shot-code-vfx-work.py all_shots.xlsx
+   python3 shot-metadata.py all_shots.xlsx
    ```
 
 5. **In Resolve:**
@@ -229,8 +248,6 @@ The current workaround is the `--half-frame` flag. The script will print all cli
    - "Change to Cut" column shows In/Out frame differences
    - Positive = moved to the right on timeline, Negative = moved to the left on timeline
 
----
-
 ## Installation Details
 
 ### Prerequisites
@@ -262,8 +279,6 @@ python -m pip install -r requirements.txt
 Download and install Python from [python.org](https://www.python.org/downloads/)
 
 **Windows users:** Make sure to check "Add Python to PATH" during installation!
-
----
 
 ## Troubleshooting
 
@@ -300,7 +315,6 @@ Download and install Python from [python.org](https://www.python.org/downloads/)
 - Ensure you have write permissions for Python package installation
 - On macOS/Linux, you may need to use `pip3` instead of `pip`
 
----
 
 ## Technical Details
 
@@ -340,7 +354,6 @@ When using `--shotgun`:
 - Applies shift to all shot/element frame numbers
 - Records differences in "Change to Cut" columns
 
----
 
 ## Tips & Best Practices
 
@@ -352,24 +365,22 @@ When using `--shotgun`:
 - **Subtitle Precision**: Ensure subtitle items exactly span each shot's duration
 - **Test First**: Run on a small test timeline before processing large projects
 
----
 
 ## File Structure
 
 ```
 resolve-vfx-scripts/
-├── README.md                    # This file
-├── requirements.txt            # Python dependencies
-├── install_dependencies.sh     # macOS/Linux installer
-├── install_dependencies.bat    # Windows installer
+├── README.md                  # This file
+├── requirements.txt           # Python dependencies
+├── install_dependencies.sh    # macOS/Linux installer
+├── install_dependencies.bat   # Windows installer
 ├── .env.example               # ShotGrid config template
 ├── api.json.example           # ShotGrid config template
-├── clip-inventory.py          # Clip export with thumbnails
-├── shot-code-vfx-work.py      # Generate subtitles of VFX shot codes
-└── shot-list.py               # VFX shot list export
+├── frame-counter.py           # Generate frame counter videos
+├── clip-inventory.py          # Export clip lists with thumbnails
+├── shot-metadata.py           # Generate shot metadata subtitles
 ```
 
----
 
 ## Support
 
@@ -378,7 +389,6 @@ For issues or questions:
 2. Verify all prerequisites (Resolve Studio running, project/timeline open)
 3. Confirm dependencies are installed (re-run installer if needed)
 
----
 
 ## License & Credits
 
