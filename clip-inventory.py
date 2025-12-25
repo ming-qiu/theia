@@ -34,7 +34,7 @@ except ImportError:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Create an inventory of BG clips")
+    parser = argparse.ArgumentParser(description="Create an inventory of clips on the BG track")
     parser.add_argument("--file-name", default = "clip_inventory.xlsx", help="Output file name")
     parser.add_argument("--bg-track", default = 1, help = "Track number of the BG track")
     return parser.parse_args()
