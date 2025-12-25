@@ -115,7 +115,7 @@ python3 shot-metadata.py --excel ./shot_list.xlsx --metadata-from G --metadata-t
 5. Import the generated SRT files into Resolve
 6. Adjust the size and position of the frame counter
 
-### `shot-list.py` - Comprehensive VFX Shot List
+### `shot-list.py` - _Comprehensive VFX Shot List THIS IS UNDER CONSTRUCTION DO NOT USE_
 
 Creates detailed shot and element breakdown with optional ShotGrid sync.
 
