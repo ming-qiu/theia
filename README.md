@@ -1,8 +1,12 @@
-# DaVinci Resolve VFX Editor Scripts
+# Theia 明察秋毫: DaVinci Resolve VFX Editor Scripts
 
 A collection of Python scripts for exporting shot information and VFX data from DaVinci Resolve timelines.
 
 **Note: These scripts require DaVinci Resolve Studio. The free version does not include the scripting API.**
+
+In Greek mythology, Theia was a Titan goddess of sight and shining heavenly light, daughter of Uranus and Gaea, who embodied the bright blue sky and bestowed radiance on gold, silver, and gems.
+
+“明察秋毫”是一个汉语成语，意思是目光敏锐，能看清秋天鸟兽新长出来的细毛，比喻能洞察一切，看出极其细微的地方，出自《孟子·梁惠王上》，多含褒义，形容人精明、观察力强。
 
 ## Prep Your Resolve
 
