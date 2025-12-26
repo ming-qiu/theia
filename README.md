@@ -115,9 +115,9 @@ python3 shot-metadata.py --excel ./shot_list.xlsx --metadata-from G --metadata-t
 5. Import the generated SRT files into Resolve
 6. Adjust the size and position of the frame counter
 
-### `shot-list.py` - _Comprehensive VFX Shot List THIS IS UNDER CONSTRUCTION DO NOT USE_
+### `shot-list.py` - Comprehensive VFX Shot List
 
-Creates detailed shot and element breakdown with optional ShotGrid sync.
+Creates detailed shot and element breakdown with the option to compare the current edit to the last edit.
 
 **Quick Usage:**
 ```bash
@@ -127,27 +127,19 @@ python3 shot-list.py --output shot_list.xlsx
 **Advanced Usage:**
 ```bash
 # Specify timeline and handles
-python3 shot-list.py --timeline "master" --work-handle 12 --scan-handle 48 --output vfx_shots.xlsx
-
-# With ShotGrid sync and editorial change report
-python3 shot-list.py --shotgun --output vfx_shots.xlsx
+python3 shot-list.py --timeline "master_0306" --work-handle 12 --scan-handle 48 --output vfx_shots.xlsx --top 7 --counter-track 9 --old-timeline "master_0205"
 ```
 
-**Half-frame Problem and the Workaround:**
-
-Sometimes the Resolve API can return clip start and end times that are a half frame more than the actual value, causing precision problems when calculating retimes etc. For example, on a 25 fps timeline, when the clip starts at 21:35:14:04, the API could read a clip start time of 77516.81999999999 (seconds), while the correct number should be 77516.8. The API's reading is off by 0.5 * 1 / 25 second = 0.02 frame. This only happens to some projects, and it's unclear what leads to this problem.
-
-The current workaround is the `--half-frame` flag. The script will print all clips' start times to your terminal. If those numbers are a half frame `(0.5 * 1 / fps)` off, rerun the script with the `--half-frame` flag. To check if the numbers are off, you can pick a clip in Resolve that starts at HH:MM:SS:00, and see if the corresponding clip start time in your terminal is an integer.
-
 **Options:**
-- `--timeline NAME` - Specify timeline name (default: current active timeline)
-- `--sequence NAME` - Sequence name (default: extracted from timeline name before first `_`)
-- `--output PATH` - Output Excel file path (default: `shot_list.xlsx`)
-- `--init-cut-in N` - Initial cut-in frame number (default: 1009)
-- `--work-handle N` - Work handle frames (default: 8)
-- `--scan-handle N` - Scan handle frames (default: 24)
-- `--half-frame` - Apply half-frame offset correction
-- `--shotgun` - Query ShotGrid for previous edit info and calculate changes
+- `--timeline` Specify timeline name (default: current active timeline)
+- `--output` Output Excel path (default: shot_list.xlsx)
+- `--bottom` Track number of the bottom video layer (default: 1)
+- `--top` Track number of the top video layer (default: 4)
+- `--counter-track` Track number of the frame counter layer (default: 5)
+- `--output` Output Excel file path (default: `shot_list.xlsx`)
+- `--work-handle` Work handle frames (default: 8)
+- `--scan-handle` Scan handle frames (default: 24)
+- `--old-timeline` Timeline name of the last edit (default: None)
 
 **What You Get:**
 
@@ -156,7 +148,7 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 - Cut order
 - Editorial name (of the ScanBg element)
 - Shot code
-- Change to cut (if using ShotGrid)
+- Change to cut (if comparing to an older edit)
 - Work In/Out, Cut In/Out
 - Cut duration
 - Bg/Fg retime flags
@@ -173,10 +165,8 @@ The current workaround is the `--half-frame` flag. The script will print all cli
 **Features:**
 - Automatic retime detection (constant speed and non-linear)
 - Scale and reposition detection
-- ShotGrid integration for tracking editorial changes
 
 **Requirements:**
-- Any reference track should be named "ref" in Resolve and will be ignored by the script
 - Subtitle track must contain shot codes (one subtitle item per shot defines the shot span)
 
 ## Common Workflows

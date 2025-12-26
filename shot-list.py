@@ -30,7 +30,6 @@ def parse_args():
     p.add_argument("--bottom", default = 1, help="Track number of the bottom video layer (default: 1)")
     p.add_argument("--top", default = 4, help="Track number of the top video layer (default: 1)")
     p.add_argument("--counter-track", default = 5, help="Track number of the frame counter (default: 5)")
-    p.add_argument("--init-cut-in", type = int, default=1009, help="INIT_CUT_IN (default: 1009)")
     p.add_argument("--work-handle", type = int, default=8, help="WORK_HANDLE frames (default: 8)")
     p.add_argument("--scan-handle", type = int, default=24, help="SCAN_HANDLE frames (default: 24)")
     #p.add_argument("--half-frame", action='store_true', help="Apply half-frame offset correction (default False)")
