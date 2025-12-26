@@ -42,7 +42,6 @@ def parse_args():
 def get_resolve_objects():
     """Initialize and return Resolve API objects."""
     resolve = dvr.scriptapp("Resolve")
-    starting_page = resolve.GetCurrentPage()
 
     if not resolve:
         print("Error: Could not connect to DaVinci Resolve")
@@ -58,16 +57,8 @@ def get_resolve_objects():
     if not timeline:
         print("Error: No timeline is currently open")
         sys.exit(1)
-
-    try:
-        print ("Opening Color page...")
-        resolve.OpenPage('color')
-        time.sleep(1)
-    except:
-        print ("Error: Cannot go to Color page")
-        sys.exit(1)
     
-    return resolve, project, timeline, resolve, starting_page
+    return resolve, project, timeline
 
 
 def get_clip_thumbnail(resolve, project, timeline, clip, timeline_fps):
@@ -133,7 +124,16 @@ def export_cuts_to_excel(output_path, bg_track):
     """Main function to export timeline cuts to Excel."""
     
     print("Connecting to DaVinci Resolve...")
-    resolve, project, timeline, resolve, starting_page = get_resolve_objects()
+    resolve, project, timeline = get_resolve_objects()
+    starting_page = resolve.GetCurrentPage()
+
+    try:
+        print ("Opening Color page...")
+        resolve.OpenPage('color')
+        time.sleep(1)
+    except:
+        print ("Error: Cannot go to Color page")
+        sys.exit(1)
     
     timeline_name = timeline.GetName()
     timeline_fps = float(timeline.GetSetting("timelineFrameRate"))
@@ -166,9 +166,9 @@ def export_cuts_to_excel(output_path, bg_track):
     ws['D1'] = "Record TC In"
     ws['E1'] = "Record TC Out"
     ws['F1'] = "Source TC In"
-    ws['G1'] = "VFX Shot Code"
-    ws['H1'] = "VFX Work"
-    ws['I1'] = "Vendor"
+    ws['G1'] = "Metadata 1"
+    ws['H1'] = "Metadata 2"
+    ws['I1'] = "Metadata 3"
     
     # Set column widths
     ws.column_dimensions['A'].width = 34
@@ -258,7 +258,6 @@ def export_cuts_to_excel(output_path, bg_track):
     print("Export complete!")
 
     resolve.OpenPage(starting_page)
-
 
 if __name__ == "__main__":
     # Default output path - modify as needed

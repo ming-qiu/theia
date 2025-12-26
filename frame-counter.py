@@ -9,8 +9,8 @@ import timecode
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Generate frame counter videos at multiple frame rates')
-    parser.add_argument('--w', type=int, default = 160, help='Width of video, default is 160')
-    parser.add_argument('--h', type=int, default = 80, help='Height of video, default is 80')
+    parser.add_argument('--w', type=int, default = 200, help='Width of video, default is 160')
+    parser.add_argument('--h', type=int, default = 100, help='Height of video, default is 80')
     parser.add_argument('--begin', type=int, default = 1009, help='Beginning frame number, default is 1009')
     parser.add_argument('--end', type=int, default = 2000, help='Ending frame number, default is 2000')
     parser.add_argument('--fps', type=float, default = 24, help='Frame rate, default is 24')
@@ -34,12 +34,12 @@ def generate_frame_counter(w, h, begin, end, fps, output_dir, font_path):
     print(f"Generating frames for {fps} fps...")
     
     # Generate frame images
-    font = ImageFont.truetype(font_path, int(0.8 * h))
+    font = ImageFont.truetype(font_path, int(0.75 * h))
     
     for f in range(begin, end + 1):
         im = Image.new(mode="RGB", size=(w, h))
         im_with_number = ImageDraw.Draw(im)
-        im_with_number.text((int(0.1 * h), int(0.1 * h)), str(f).zfill(4), font=font, fill=(255, 255, 255), align = 'center')
+        im_with_number.text((int(0.1 * h), int(0.1 * h)), str(f), font=font, fill=(255, 255, 255), align = 'center')
         file_name = str(f).zfill(4) + '.png'
         file_path = os.path.join(frame_output_path, file_name)
         im.save(file_path)
