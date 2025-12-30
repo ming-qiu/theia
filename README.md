@@ -135,43 +135,76 @@ python3 shot-list.py --timeline "master_0306" --work-handle 12 --scan-handle 48 
 ```
 
 **Options:**
-- `--timeline` Specify timeline name (default: current active timeline)
-- `--output` Output Excel path (default: shot_list.xlsx)
-- `--bottom` Track number of the bottom video layer (default: 1)
-- `--top` Track number of the top video layer (default: 4)
-- `--counter-track` Track number of the frame counter layer (default: 5)
+- `--timeline` Timeline name to process (default: current active timeline)
 - `--output` Output Excel file path (default: `shot_list.xlsx`)
-- `--work-handle` Work handle frames (default: 8)
-- `--scan-handle` Scan handle frames (default: 24)
-- `--old-timeline` Timeline name of the last edit (default: None)
+- `--bottom` Track number of the bottom video layer to process (default: 1)
+- `--top` Track number of the top video layer to process (default: 4)
+- `--counter-track` Track number containing frame counter clips (default: 5)
+- `--work-handle` Work handle frames added to Cut In/Out (default: 8)
+- `--scan-handle` Scan handle frames for scanning/pre-comp (default: 24)
+- `--old-timeline` Timeline name of the previous edit for comparison (default: None)
+
+**How It Works:**
+
+1. **Shot Detection**: Reads shot codes from the first non-empty subtitle track. Each subtitle item defines one shot's time span on the timeline.
+
+2. **Frame Counter Track**: Uses clips on the `--counter-track` to determine the Cut In and Cut Out frame numbers for each shot. The script reads the source timecode from frame counter clips that fall within each shot's subtitle span.
+
+3. **Element Extraction**: Processes all video tracks between `--bottom` and `--top` (excluding the counter track) to extract element information:
+   - Track 1: `ScanBg` (background element)
+   - Track 2+: `ScanFg01`, `ScanFg02`, etc. (foreground elements)
+
+4. **Retime Detection**: Automatically detects and documents:
+   - **Constant speed retimes**: Displayed as percentage (e.g., "50%", "200%")
+   - **Non-linear retimes**: Displayed as frame mappings (e.g., "1009 -> 1009, 1017 -> 1025")
+   - Groups consecutive clips from the same reel with back-to-back source frames into merged elements
+
+5. **Comparison Mode**: When `--old-timeline` is specified, compares current edit with the previous edit and calculates frame differences in the "Change to Cut" column.
 
 **What You Get:**
 
 **"Shots" Sheet:**
-- Sequence name
-- Cut order
-- Editorial name (of the ScanBg element)
-- Shot code
-- Change to cut (if comparing to an older edit)
-- Work In/Out, Cut In/Out
-- Cut duration
-- Bg/Fg retime flags
-- Cut In TC
+- `Sequence`: Sequence name extracted from shot code
+- `Cut Order`: Sequential order of shots (1, 2, 3...)
+- `Editorial Name`: Reel name from the ScanBg element (earliest background clip)
+- `Shot Code`: Shot code from subtitle track (first token extracted)
+- `Change to Cut`: Frame differences if comparing to old timeline (e.g., "In: +5, Out: -3")
+- `Work In/Out`: Cut In/Out ± work handle frames
+- `Cut In/Out`: Frame numbers in VFX frame system (from counter track)
+- `Cut Duration`: Duration of the shot in frames
+- `Bg Retime`: "x" if background has retime, empty otherwise
+- `Fg Retime`: "x" if any foreground element has retime, empty otherwise
+- `Cut In TC`: Timecode of Cut In from ScanBg element
 
 **"Elements" Sheet:**
-- All shot info
-- Element name (ScanBg, ScanFg01, ScanFg02, etc.)
-- Cut In/Out for the shot
-- Clip In/Out TC and frame numbers
-- Retime summary (speed percentages or frame mappings)
-- Scale & Reposition info
+- `Sequence`: Sequence name
+- `Cut Order`: Shot order
+- `Editorial Name`: Reel name of the element
+- `Shot Code`: Shot code
+- `Element`: Element name (ScanBg, ScanFg01, ScanFg02, etc.)
+- `Cut In/Out`: Shot boundaries in VFX frame system
+- `Clip In TC`: Source timecode in point
+- `Clip In Frames`: Source frame number in point
+- `Clip In`: Element in point in VFX frame system
+- `Clip Out`: Element out point in VFX frame system
+- `Clip Out Frames`: Source frame number out point
+- `Clip Out TC`: Source timecode out point
+- `Clip Duration`: Duration of the clip in frames
+- `Retime Summary`: Retime information (percentage or frame mappings)
+- `Scale & Repo`: Scale percentage and reposition coordinates (if applicable)
 
 **Features:**
 - Automatic retime detection (constant speed and non-linear)
-- Scale and reposition detection
+- Scale and reposition detection from clip properties
+- Frame-accurate cut point calculation using counter track
+- Element grouping for non-linear retimes
+- Comparison with previous edit versions
 
 **Requirements:**
-- Subtitle track must contain shot codes (one subtitle item per shot defines the shot span)
+- **Subtitle track** must contain shot codes (one subtitle item per shot defines the shot span)
+- **Frame counter track** (`--counter-track`) must contain frame counter clips within each shot's span
+- Video tracks between `--bottom` and `--top` should contain the elements to extract
+- Shot codes in subtitles should be the first token (text before any whitespace)
 
 ## Common Workflows
 
@@ -206,41 +239,43 @@ python3 shot-list.py --timeline "master_0306" --work-handle 12 --scan-handle 48 
 **Goal:** Export comprehensive shot breakdown for VFX team
 
 1. **In Resolve:**
-   - Make sure there is a subtitle track that contains VFX shot codes
+   - Make sure there is a subtitle track that contains VFX shot codes (one subtitle item per shot)
    - If the subtitles also contain VFX work or any other text, make sure the shot code is the first part of the text
+   - Ensure a frame counter track is set up with frame counter clips within each shot's span (default track 5)
+   - Organize elements on video tracks: Track 1 = ScanBg, Track 2+ = ScanFg elements
 
 2. **Export:**
    ```bash
    python3 shot-list.py --output project_vfx_shots.xlsx
    ```
+   
+   Or with custom track configuration:
+   ```bash
+   python3 shot-list.py --bottom 1 --top 6 --counter-track 7 --output project_vfx_shots.xlsx
+   ```
 
 3. **Review:**
    - Open Excel file
-   - Check "Shots" sheet for overall shot info
-   - Check "Elements" sheet for per-clip details
+   - Check "Shots" sheet for overall shot info (cut points, handles, retime flags)
+   - Check "Elements" sheet for per-clip details (timecodes, retime info, scale/repo)
 
-### Workflow 3: ShotGrid-Tracked Editorial Changes
+### Workflow 3: Compare Editorial Changes
 
-**Goal:** Compare current edit with previous ShotGrid cut
+**Goal:** Compare current edit with a previous edit version
 
-1. **Configure ShotGrid** (one-time setup):
-   - Copy `.env.example` to `.env`
-   - Add your `SCRIPT_KEY`
-   - Copy `api.json.example` to `api.json`
-   - Add your `SERVER_PATH` and `SCRIPT_USER`
-   - SCRIPT_KEY can also be stored as an environment variable of your computer
+1. **In Resolve:**
+   - Ensure both the current timeline and the old timeline are in the same project
+   - Both timelines should have the same structure (subtitle tracks, frame counter track, element tracks)
 
-2. **In Resolve:**
-   - Project name should be the same as the project's code in ShotGrid
-
-3. **Export with ShotGrid Sync:**
+2. **Export with Comparison:**
    ```bash
-   python3 shot-list.py --shotgun --output updated_cut.xlsx
+   python3 shot-list.py --timeline "cut_v3" --old-timeline "cut_v2" --output comparison.xlsx
    ```
 
-4. **Review Changes:**
-   - "Change to Cut" column shows In/Out frame differences
-   - Positive = moved to the right on timeline, Negative = moved to the left on timeline
+3. **Review Changes:**
+   - "Change to Cut" column in the Shots sheet shows frame differences
+   - Format: "In: +5, Out: -3" (positive = moved later/right, negative = moved earlier/left)
+   - Also detects retime changes between edits
 
 ## Installation Details
 
@@ -253,7 +288,6 @@ The installer adds these Python packages to your system Python:
 - `openpyxl` - Excel file creation
 - `Pillow` - Image processing for thumbnails
 - `timecode` - Timecode calculations
-- `shotgun-api3` - ShotGrid integration (optional)
 - `python-dotenv` - Environment configuration
 
 ### Manual Installation
@@ -294,13 +328,14 @@ Download and install Python from [python.org](https://www.python.org/downloads/)
 **Solution:** 
 - For `shot-list.py`: Add shot codes to a subtitle track
 - Each subtitle item defines one shot's time span
+- Ensure at least one subtitle track has items
 
-### ShotGrid Connection Issues
+### "Counter track not found or no counter clips in shot"
 **Solution:**
-- Verify `.env` file exists with correct `SCRIPT_KEY`
-- Check `api.json` exists and contains valid credentials
-- Test ShotGrid connection separately
-- Ensure project code in Resolve matches ShotGrid project
+- Ensure frame counter clips are placed on the track specified by `--counter-track` (default: 5)
+- Each shot's subtitle span must contain at least one frame counter clip
+- Frame counter clips should have valid source timecode
+- Check that counter clips fall within the shot's subtitle item boundaries
 
 ### Installation Failed
 **Solution:**
@@ -314,11 +349,11 @@ Download and install Python from [python.org](https://www.python.org/downloads/)
 
 ### Shot List Frame Calculations
 
-- **INIT_CUT_IN** (default 1009): The frame number assigned to the start of the first shot
-- **Cut In/Out**: Shot boundaries in VFX frame numbering system
-- **Work In/Out**: Cut In/Out +/- WORK_HANDLE (for artist working space)
-- **Clip In/Out**: Element frame numbers in same VFX frame system
-- **Scan Handles**: Additional frames for scanning/pre-comp (not shown in sheets)
+- **Cut In/Out**: Shot boundaries in VFX frame numbering system, determined by reading source timecode from frame counter clips on the counter track
+- **Work In/Out**: Cut In/Out ± work handle frames (default: 8 frames) for artist working space
+- **Clip In/Out**: Element frame numbers in same VFX frame system, calculated relative to shot Cut In
+- **Scan Handles**: Additional frames for scanning/pre-comp (default: 24 frames, used in HeadIn/TailOut calculations but not shown in main sheets)
+- **HeadIn/TailOut**: Clip boundaries extended by scan handles for scanning purposes
 
 ### Retime Detection
 
@@ -329,8 +364,9 @@ The scripts detect:
 
 ### Scale & Repo Presentation
 
-- **Scale**: The script detects the Zoom X value at the in point of the clip. Keyframed scale not documented precisely at this time
+- **Scale**: The script detects the Zoom X value at the in point of the clip. Displayed as percentage (e.g., "Scale: 150%")
 - **Repo**: Not available at this time. Stay tuned for updates
+- Note: Keyframed scale/repo changes within a clip are not documented precisely at this time
 
 ### Track Naming Convention
 
@@ -339,14 +375,14 @@ The scripts detect:
 - Track 3: `ScanFg02` (foreground element 2)
 - Tracks with "ref" in name are skipped
 
-### ShotGrid Integration
+### Timeline Comparison
 
-When using `--shotgun`:
-- Matches shots by code and project
-- Retrieves previous cut timecodes
-- Calculates frame shift between old and new cut
-- Applies shift to all shot/element frame numbers
-- Records differences in "Change to Cut" columns
+When using `--old-timeline`:
+- Matches shots by Shot Code between current and old timeline
+- Compares Cut In/Out frame numbers for each matched shot
+- Calculates frame differences (In: ±N, Out: ±M)
+- Detects retime changes between edits
+- Records all differences in the "Change to Cut" column of the Shots sheet
 
 
 ## Tips & Best Practices
@@ -354,9 +390,12 @@ When using `--shotgun`:
 - **Save First**: Always save your Resolve project before running scripts
 - **Backup**: Keep backups of important Excel files before re-exporting
 - **Consistent Naming**: Use consistent shot code formats (e.g., SH010, SH020)
+- **Frame Counter Track**: Ensure frame counter clips are placed on the counter track and fall within each shot's subtitle span
 - **Reference Tracks**: Name reference tracks with "ref" so they're automatically skipped
 - **Timeline Organization**: Keep elements on consecutive video tracks without gaps
 - **Subtitle Precision**: Ensure subtitle items exactly span each shot's duration
+- **Shot Code Format**: Place shot code as the first token in subtitle text (before any whitespace or additional text)
+- **Track Configuration**: Use `--bottom` and `--top` to specify the range of tracks containing elements (counter track is automatically excluded)
 - **Test First**: Run on a small test timeline before processing large projects
 
 
@@ -373,6 +412,7 @@ resolve-vfx-scripts/
 ├── frame-counter.py           # Generate frame counter videos
 ├── clip-inventory.py          # Export clip lists with thumbnails
 ├── shot-metadata.py           # Generate shot metadata subtitles
+├── shot-list.py               # Export comprehensive VFX shot list with elements
 ```
 
 

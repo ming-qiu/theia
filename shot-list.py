@@ -385,9 +385,11 @@ def read_edit(args, app, project, timeline, fps):
         cut_order += 1
         print (f"==== Cut {cut_order} ====")
 
-        sub_start = sub.GetStart(False)  # int frames on timeline
+        sub_start = sub.GetStart(False)
         sub_end   = sub.GetEnd(False)
+        cut_dur = sub_end - sub_start
 
+        
         for counter in counters:
             counter_start = counter.GetStart(False)
             counter_end = counter.GetEnd(False)
@@ -396,7 +398,8 @@ def read_edit(args, app, project, timeline, fps):
                 print (tc_info)
                 cut_in  = tc_info['ClipInFrames']
                 cut_out  = tc_info['ClipOutFrames'] - 1
-                cut_dur = (cut_out - cut_in + 1)
+
+        # TO DO: if counter is not available, read BG clips, calculate cut_in with BG in TC + shot_list.xlsx from the last edit
 
         # Collect elements contained fully inside [sub_start, sub_end]
         elements_by_track = defaultdict(list)
