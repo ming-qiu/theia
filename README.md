@@ -273,7 +273,6 @@ The installer adds these Python packages to your system Python:
 - `openpyxl` - Excel file creation
 - `Pillow` - Image processing for thumbnails
 - `timecode` - Timecode calculations
-- `python-dotenv` - Environment configuration
 
 ### Manual Installation
 
