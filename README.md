@@ -22,13 +22,13 @@ _Throw the txt into any LLM to format it better._
 
 **macOS/Linux:**
 ```bash
-chmod +x install_dependencies.sh
-./install_dependencies.sh
+chmod +x config/install_dependencies.sh
+./config/install_dependencies.sh
 ```
 
 **Windows:**
 ```cmd
-install_dependencies.bat
+config\install_dependencies.bat
 ```
 
 The installer will use your system Python and install all required packages.
@@ -280,10 +280,10 @@ If the automatic installer doesn't work:
 
 ```bash
 # macOS/Linux
-python3 -m pip install -r requirements.txt
+python3 -m pip install -r config/requirements.txt
 
 # Windows
-python -m pip install -r requirements.txt
+python -m pip install -r config\requirements.txt
 ```
 
 ### Don't Have Python Installed?
@@ -386,17 +386,18 @@ When using `--old-timeline`:
 ## File Structure
 
 ```
-resolve-vfx-scripts/
+theia/
 ├── README.md                  # This file
-├── requirements.txt           # Python dependencies
-├── install_dependencies.sh    # macOS/Linux installer
-├── install_dependencies.bat   # Windows installer
-├── .env.example               # ShotGrid config template
-├── api.json.example           # ShotGrid config template
+├── config/                    # Configuration and installation files
+│   ├── requirements.txt       # Python dependencies
+│   ├── install_dependencies.sh # macOS/Linux installer
+│   └── install_dependencies.bat # Windows installer
 ├── frame-counter.py           # Generate frame counter videos
 ├── clip-inventory.py          # Export clip lists with thumbnails
 ├── shot-metadata.py           # Generate shot metadata subtitles
 ├── shot-list.py               # Export comprehensive VFX shot list with elements
+├── frame-counters/            # Output directory for frame counter videos
+├── SF-Pro-Text-Regular.otf    # Font file for frame counter generation
 ```
 
 
