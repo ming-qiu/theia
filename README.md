@@ -210,7 +210,7 @@ python3 shot-list.py --timeline "master_0306" --work-handle 12 --scan-handle 48 
 
 ### Workflow 1: Add VFX shot codes and VFX work as subtitles
 
-**Goal:** Document which shots are VFX shots, give them names, and optionally document the work required.
+Document which shots are VFX shots, give them names, and optionally document the work required.
 
 1. **In Resolve:**
    - Consolidate all shots to video track 1
@@ -222,17 +222,20 @@ python3 shot-list.py --timeline "master_0306" --work-handle 12 --scan-handle 48 
 
 3. **Review & Assign:**
    - Open `all_shots.xlsx`
-   - Review thumbnails
-   - Fill Column G with shot codes (e.g., "SH010", "SH020")
-   - Fill Column H with VFX work required (optional)
+   - Fill Column G and on with metadata of the shots, such as VFX shot code
 
-4. **Import as Subtitles:**
+4. **Generate Frame Counter:**
    ```bash
-   python3 shot-metadata.py all_shots.xlsx
+   python3 frame-counter.py --fps 25 --begin 977 --end 2000
    ```
 
-5. **In Resolve:**
-   - Import the generated .srt
+5. **Add Frame Counters to Timeline:**
+   ```bash
+   python3 shot-metadata.py --sheet all_shots.xlsx --metadata-from G --metadata-to J --frame-counter ./frame-counters/frame_counter_25fps.mp4 --first-frame 1009 --fps 25
+   ```
+
+6. **In Resolve:**
+   - Import the generated .srt files
 
 ### Workflow 2: Create VFX Shot List
 
@@ -246,36 +249,18 @@ python3 shot-list.py --timeline "master_0306" --work-handle 12 --scan-handle 48 
 
 2. **Export:**
    ```bash
-   python3 shot-list.py --output project_vfx_shots.xlsx
+   python3 shot-list.py --output cut_v3_shot_list.xlsx
    ```
    
-   Or with custom track configuration:
+   Or with custom track configuration and an older edit to compare to:
    ```bash
-   python3 shot-list.py --bottom 1 --top 6 --counter-track 7 --output project_vfx_shots.xlsx
+   python3 shot-list.py --bottom 1 --top 6 --counter-track 7 --output cut_v3_shot_list.xlsx --old-timeline "cut_v2"
    ```
 
 3. **Review:**
    - Open Excel file
    - Check "Shots" sheet for overall shot info (cut points, handles, retime flags)
    - Check "Elements" sheet for per-clip details (timecodes, retime info, scale/repo)
-
-### Workflow 3: Compare Editorial Changes
-
-**Goal:** Compare current edit with a previous edit version
-
-1. **In Resolve:**
-   - Ensure both the current timeline and the old timeline are in the same project
-   - Both timelines should have the same structure (subtitle tracks, frame counter track, element tracks)
-
-2. **Export with Comparison:**
-   ```bash
-   python3 shot-list.py --timeline "cut_v3" --old-timeline "cut_v2" --output comparison.xlsx
-   ```
-
-3. **Review Changes:**
-   - "Change to Cut" column in the Shots sheet shows frame differences
-   - Format: "In: +5, Out: -3" (positive = moved later/right, negative = moved earlier/left)
-   - Also detects retime changes between edits
 
 ## Installation Details
 
