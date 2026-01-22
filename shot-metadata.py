@@ -68,7 +68,18 @@ def add_frame_counters(sheet_path, frame_counter_path, first_frame, fps):
     for row in ws.iter_rows(min_row=2, values_only=True):
         if len(row) < 5:
             continue
+
+        # Check if any metadata exists in column G onwards (index 6+)
+        has_metadata = False
+        for cell_value in row[6:]:  # Column G is index 6
+            if cell_value and str(cell_value).strip():
+                has_metadata = True
+                break
         
+        # Skip this shot if no metadata
+        if not has_metadata:
+            continue
+
         record_tc_in = Timecode(fps, str(row[3]))   # Column D
         record_tc_out = Timecode(fps, str(row[4]))  # Column E
         

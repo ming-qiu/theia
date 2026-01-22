@@ -157,7 +157,7 @@ def export_cuts_to_excel(output_path, bg_track):
     print("\nCreating Excel workbook...")
     wb = Workbook()
     ws = wb.active
-    ws.title = "Cut Points"
+    ws.title = "Shots"
     
     # Set column headers
     ws['A1'] = "Thumbnail"
@@ -186,6 +186,11 @@ def export_cuts_to_excel(output_path, bg_track):
         print(f"\nProcessing clip {idx}/{len(clips)}...")
         row = idx + 1  # +1 for header row
         
+        # B: Reel Name
+        reel_name = clip.GetName()
+        ws[f'B{row}'] = reel_name
+        print(f"  Reel Name: {reel_name}")
+
         # C: Cut Order
         ws[f'C{row}'] = idx
         
@@ -201,35 +206,37 @@ def export_cuts_to_excel(output_path, bg_track):
         ws[f'E{row}'] = str(record_tc_out)
         print(f"  Record TC Out: {record_tc_out}")
         
-        # F: Source TC (in point of the clip in source media)
-        # Get source FPS from media pool item if available
-        media_pool_item = clip.GetMediaPoolItem()
-        try:
-            clip_props = media_pool_item.GetClipProperty()
-            source_fps_str = clip_props.get('FPS', str(timeline_fps))
-            source_fps = float(source_fps_str)
-        except:
-            source_fps = timeline_fps
-        
-        take_start_tc = media_pool_item.GetClipProperty().get('Start TC')
-        take_start_frame = Timecode(str(source_fps), take_start_tc).frames
-        left_offset = clip.GetLeftOffset()       
-        clip_start_frame = take_start_frame + left_offset
 
-        source_tc = Timecode(source_fps, frames=int(clip_start_frame))
-        ws[f'F{row}'] = str(source_tc)
-        print(f"  Source TC: {source_tc}")
-        
-        # B: Reel Name
-        reel_name = clip.GetName()
-        ws[f'B{row}'] = reel_name
-        print(f"  Reel Name: {reel_name}")
+        if clip.GetMediaPoolItem() != None:
+            media_pool_item = clip.GetMediaPoolItem()
+
+            try:
+                clip_props = media_pool_item.GetClipProperty()
+                source_fps_str = clip_props.get('FPS', str(timeline_fps))
+                source_fps = float(source_fps_str)
+            except:
+                source_fps = timeline_fps
+
+            take_start_tc = media_pool_item.GetClipProperty().get('Start TC')
+            take_start_frame = Timecode(str(source_fps), take_start_tc).frames
+            left_offset = clip.GetLeftOffset()       
+            clip_start_frame = take_start_frame + left_offset
+
+            source_tc = Timecode(source_fps, frames=int(clip_start_frame))
+            ws[f'F{row}'] = str(source_tc)
+            print(f"  Source TC: {source_tc}")
+        else:
+            source_tc = record_tc_in
+            ws[f'F{row}'] = str(source_tc)
+            print(f"  Source TC: {source_tc}")
+
         
         # A: Thumbnail
         print(f"  Getting thumbnail...")
         thumb_img = get_clip_thumbnail(resolve, project, timeline, clip, timeline_fps)
         
-        if thumb_img:
+        # Skip thumb_img processing if the clip is a title shape
+        if thumb_img and clip.GetMediaPoolItem() != None:
             # Resize thumbnail to reasonable size (max 150 pixels height)
             max_height = 150
             aspect_ratio = thumb_img.width / thumb_img.height

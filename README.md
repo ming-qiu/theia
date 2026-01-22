@@ -108,7 +108,7 @@ Option to add frame counters to all the shots specified in the sheet.
 
 **Quick Usage:**
 ```bash
-python3 shot-metadata.py --excel ./shot_list.xlsx --metadata-from G --metadata-to I --frame-counter ./frame-counters/frame_counter_24fps.mp4 --first-frame 1009 --fps 24
+python3 shot-metadata.py --sheet ./shot_list.xlsx --metadata-from G --metadata-to I --frame-counter ./frame-counters/frame_counter_24fps.mp4 --first-frame 1009 --fps 24
 ```
 
 **Workflow:**
