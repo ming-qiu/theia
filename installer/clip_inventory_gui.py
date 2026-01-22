@@ -206,7 +206,7 @@ class ClipInventoryGUI(QMainWindow):
         super().__init__()
         self.worker = None
         self.last_export_path = None
-        self.load_resources()
+        #self.load_resources()
         self.setup_ui()
         self.populate_track_list()
     
@@ -215,15 +215,15 @@ class ClipInventoryGUI(QMainWindow):
         theia_dir = Path("/Library/Application Support/Theia")
         
         # Load icon
-        icon_path = theia_dir / "resources" / "icon.png"
+        icon_path = theia_dir / "resources" / "graphics" / "clip_inventory_icon.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         
         # Load stylesheet
-        style_path = theia_dir / "resources" / "win95.qss"
-        if style_path.exists():
-            with open(style_path, 'r') as f:
-                self.setStyleSheet(f.read())
+        # style_path = theia_dir / "resources" / "win95.qss"
+        # if style_path.exists():
+        #     with open(style_path, 'r') as f:
+        #         self.setStyleSheet(f.read())
     
     def setup_ui(self):
         """Build the interface."""
@@ -404,6 +404,15 @@ class ClipInventoryGUI(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+
+    theia_dir = Path("/Library/Application Support/Theia")
+    icon_path = theia_dir / "resources" / "graphics" / "clip_inventory_icon.png"
+    if icon_path.exists():
+        icon = QIcon(str(icon_path))
+        app.setWindowIcon(icon)  # <-- Dock / app icon (as much as Qt can)
+    else:
+        print("Icon not found:", icon_path)
+
     window = ClipInventoryGUI()
     window.show()
     sys.exit(app.exec())
