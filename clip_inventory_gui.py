@@ -569,16 +569,6 @@ class ClipInventoryGUI(QMainWindow):
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
-        # Output file
-        file_row = QHBoxLayout()
-        file_row.addWidget(QLabel("Output File:"))
-        self.file_input = QLineEdit(str(Path.home() / "Downloads/clip_inventory.xlsx"))
-        file_row.addWidget(self.file_input)
-        browse = QPushButton("Browse...")
-        browse.clicked.connect(self.browse_file)
-        file_row.addWidget(browse)
-        layout.addLayout(file_row)
-        
         # Track selection section
         track_section = QWidget()
         track_layout = QVBoxLayout(track_section)
@@ -621,6 +611,16 @@ class ClipInventoryGUI(QMainWindow):
         track_layout.addWidget(scroll)
         
         layout.addWidget(track_section)
+        
+        # Output file
+        file_row = QHBoxLayout()
+        file_row.addWidget(QLabel("Output File:"))
+        self.file_input = QLineEdit(str(Path.home() / "Downloads/clip_inventory.xlsx"))
+        file_row.addWidget(self.file_input)
+        browse = QPushButton("Browse...")
+        browse.clicked.connect(self.browse_file)
+        file_row.addWidget(browse)
+        layout.addLayout(file_row)
         
         # Export button
         self.export_btn = QPushButton("Export")
