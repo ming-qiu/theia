@@ -148,7 +148,7 @@ echo "Installing Theia tools..."
 mkdir -p "$THEIA_DIR/resources"
 
 # Copy GUI scripts
-for gui_script in "$INSTALLER_DIR"/*_gui.py; do
+for gui_script in "$INSTALLER_DIR"/scripts/*_gui.py; do
     if [ -f "$gui_script" ]; then
         cp "$gui_script" "$THEIA_DIR/"
         echo "  ✓ $(basename "$gui_script")"
