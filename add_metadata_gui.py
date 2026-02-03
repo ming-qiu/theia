@@ -39,12 +39,16 @@ class MetadataWorker(QThread):
     progress = Signal(str)
     finished = Signal(bool, str)
     
-    def __init__(self, sheet_path, selected_columns, output_dir, fps,
+    def __init__(self, sheet_path, selected_columns, srt_enabled, srt_output_dir, 
+                 fcpxml_enabled, fcpxml_output_dir, fps,
                  frame_counter_path=None, first_frame=None):
         super().__init__()
         self.sheet_path = sheet_path
         self.selected_columns = selected_columns  # List of (column_index, column_name) tuples
-        self.output_dir = output_dir
+        self.srt_enabled = srt_enabled
+        self.srt_output_dir = srt_output_dir
+        self.fcpxml_enabled = fcpxml_enabled
+        self.fcpxml_output_dir = fcpxml_output_dir
         self.fps = fps
         self.frame_counter_path = frame_counter_path
         self.first_frame = first_frame
@@ -77,7 +81,7 @@ class MetadataWorker(QThread):
         for idx, sub in enumerate(subtitles, start=1):
             # Convert to SRT format: HH:MM:SS,mmm
             def to_srt(tc):
-                total_sec = tc.frames / float(tc.framerate)
+                total_sec = (tc.frames - 1) / float(tc.framerate)
                 h = int(total_sec // 3600)
                 m = int((total_sec % 3600) // 60)
                 s = int(total_sec % 60)
@@ -92,6 +96,139 @@ class MetadataWorker(QThread):
         # Write SRT file
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(srt_lines))
+        
+        return output_path
+    
+    def create_fcpxml_file(self, ws, output_path, column_index, column_name):
+        """Create FCPXML file with Basic Title elements from specific Excel column."""
+        
+        # Read data from Excel
+        titles = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if len(row) <= column_index:
+                continue
+            
+            content = row[column_index]
+            if content and str(content).strip():
+                titles.append({
+                    'tc_in': Timecode(self.fps, str(row[3])),    # Column D
+                    'tc_out': Timecode(self.fps, str(row[4])),   # Column E
+                    'text': str(content).strip()
+                })
+        
+        if not titles:
+            return None
+        
+        # Determine frame rate string for FCPXML
+        fps = self.fps
+        if abs(fps - 23.976) < 0.001:
+            frame_duration = "1001/24000s"
+            rate_denominator = 24000
+            frame_numerator = 1001
+        elif abs(fps - 24) < 0.001:
+            frame_duration = "1/24s"
+            rate_denominator = 2400
+            frame_numerator = 100
+        elif abs(fps - 25) < 0.001:
+            frame_duration = "1/25s"
+            rate_denominator = 2500
+            frame_numerator = 100
+        elif abs(fps - 29.97) < 0.001:
+            frame_duration = "1001/30000s"
+            rate_denominator = 30000
+            frame_numerator = 1001
+        elif abs(fps - 30) < 0.001:
+            frame_duration = "1/30s"
+            rate_denominator = 3000
+            frame_numerator = 100
+        elif abs(fps - 60) < 0.001:
+            frame_duration = "1/60s"
+            rate_denominator = 6000
+            frame_numerator = 100
+        else:
+            # Generic fallback
+            frame_duration = f"1/{int(fps)}s"
+            rate_denominator = int(fps * 100)
+            frame_numerator = 100
+        
+        # Calculate total duration
+        last_out = titles[-1]['tc_out']
+        total_duration_frames = last_out.frames * frame_numerator
+        
+        # Build FCPXML
+        lines = []
+        lines.append('<?xml version="1.0" encoding="UTF-8"?>')
+        lines.append('<!DOCTYPE fcpxml>')
+        lines.append('<fcpxml version="1.9">')
+        lines.append('  <resources>')
+        lines.append(f'    <format id="r1" name="FFVideoFormat1080p{int(fps)}" frameDuration="{frame_duration}" width="1920" height="1080" colorSpace="1-1-1 (Rec. 709)"/>')
+        lines.append('    <effect id="r2" name="Basic Title" uid=".../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti"/>')
+        lines.append('  </resources>')
+        lines.append('  <library>')
+        lines.append(f'    <event name="{column_name}" uid="FA0976C2155BF5E1CD0AA20BD91F88B1">')
+        lines.append(f'      <project name="{column_name}" uid="A9CE7D528B481A850DDD48AF2D238B14" modDate="2026-02-02 20:24:21 +0000">')
+        
+        # Calculate total duration in fractional format
+        total_duration_str = f"{total_duration_frames}/{rate_denominator}s"
+        lines.append(f'        <sequence format="r1" duration="{total_duration_str}" tcStart="0/{int(fps)}s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">')
+        lines.append('          <spine>')
+        lines.append(f'            <gap name="Gap" offset="0s" start="0s" duration="{total_duration_str}">')
+        
+        # Add each title
+        for idx, title in enumerate(titles, start=1):
+            text = title['text']
+            
+            # Convert timecodes to frames (0-indexed) and multiply by frame numerator
+            offset_frames = (title['tc_in'].frames - 1) * frame_numerator
+            start_frames = (title['tc_in'].frames - 1) * frame_numerator
+            duration_frames = (title['tc_out'].frames - title['tc_in'].frames) * frame_numerator
+            
+            # Format as fractions
+            offset_str = f"{offset_frames}/{rate_denominator}s"
+            start_str = f"{start_frames}/{rate_denominator}s"
+            duration_str = f"{duration_frames}/{rate_denominator}s"
+            
+            ts_id = f"ts{idx}"
+            
+            lines.append(f'              <title ref="r2" lane="1" name="{text} - Basic Title" offset="{offset_str}" start="{start_str}" duration="{duration_str}">')
+            lines.append('                <param name="Flatten" key="9999/999166631/999166633/2/351" value="1"/>')
+            lines.append('                <param name="Alignment" key="9999/999166631/999166633/2/354/3142713059/401" value="1 (Center)"/>')
+            lines.append('                <param name="Alignment" key="9999/999166631/999166633/2/354/999169573/401" value="1 (Center)"/>')
+            lines.append('                <text>')
+            lines.append(f'                  <text-style ref="{ts_id}">{text}</text-style>')
+            lines.append('                </text>')
+            lines.append(f'                <text-style-def id="{ts_id}">')
+            lines.append('                  <text-style font="Helvetica" fontSize="60" fontColor="1 1 1 1" alignment="center" fontFace="Regular"/>')
+            lines.append('                </text-style-def>')
+            lines.append('              </title>')
+        
+        lines.append('            </gap>')
+        lines.append('          </spine>')
+        lines.append('        </sequence>')
+        lines.append('      </project>')
+        lines.append('    </event>')
+        lines.append('    <smart-collection name="Projects" match="all">')
+        lines.append('      <match-clip rule="is" type="project"/>')
+        lines.append('    </smart-collection>')
+        lines.append('    <smart-collection name="All Video" match="any">')
+        lines.append('      <match-media rule="is" type="videoOnly"/>')
+        lines.append('      <match-media rule="is" type="videoWithAudio"/>')
+        lines.append('    </smart-collection>')
+        lines.append('    <smart-collection name="Audio Only" match="all">')
+        lines.append('      <match-media rule="is" type="audioOnly"/>')
+        lines.append('    </smart-collection>')
+        lines.append('    <smart-collection name="Stills" match="all">')
+        lines.append('      <match-media rule="is" type="stills"/>')
+        lines.append('    </smart-collection>')
+        lines.append('    <smart-collection name="Favorites" match="all">')
+        lines.append('      <match-ratings value="favorites"/>')
+        lines.append('    </smart-collection>')
+        lines.append('  </library>')
+        lines.append('</fcpxml>')
+        
+        # Write FCPXML file
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
         
         return output_path
     
@@ -192,30 +329,44 @@ class MetadataWorker(QThread):
                     self.finished.emit(False, "Frame counter addition failed")
                     return
             
-            # Create SRT files
-            if self.selected_columns:
+            # Create SRT and FCPXML files
+            if self.selected_columns and (self.srt_enabled or self.fcpxml_enabled):
                 self.log("=" * 50)
-                self.log("Creating SRT Subtitle Files")
+                self.log("Creating Subtitle Files")
                 self.log("=" * 50)
                 
                 # Load sheet
                 wb = load_workbook(self.sheet_path)
                 ws = wb.active
                 
-                # Create SRT files for each selected column
+                # Create SRT and FCPXML files for each selected column
                 srt_count = 0
+                fcpxml_count = 0
                 for col_idx, col_name in self.selected_columns:
-                    # Create output filename from header
-                    output_path = os.path.join(self.output_dir, f"{col_name}.srt")
-                    if self.create_srt_file(ws, output_path, col_idx):
-                        self.log(f"  Created: {output_path}")
-                        srt_count += 1
+                    # Create SRT file if enabled
+                    if self.srt_enabled:
+                        srt_output_path = os.path.join(self.srt_output_dir, f"{col_name}.srt")
+                        if self.create_srt_file(ws, srt_output_path, col_idx):
+                            self.log(f"  Created SRT: {srt_output_path}")
+                            srt_count += 1
+                    
+                    # Create FCPXML file if enabled
+                    if self.fcpxml_enabled:
+                        fcpxml_output_path = os.path.join(self.fcpxml_output_dir, f"{col_name}.fcpxml")
+                        if self.create_fcpxml_file(ws, fcpxml_output_path, col_idx, col_name):
+                            self.log(f"  Created FCPXML: {fcpxml_output_path}")
+                            fcpxml_count += 1
                 
-                if srt_count > 0:
-                    self.log(f"Successfully created {srt_count} SRT file(s)")
+                if srt_count > 0 or fcpxml_count > 0:
+                    msg_parts = []
+                    if srt_count > 0:
+                        msg_parts.append(f"{srt_count} SRT")
+                    if fcpxml_count > 0:
+                        msg_parts.append(f"{fcpxml_count} FCPXML")
+                    self.log(f"Successfully created {' and '.join(msg_parts)} file(s)")
                     success_count += 1
                 else:
-                    self.log("No SRT files created (no data found in specified columns)")
+                    self.log("No files created (no data found in specified columns)")
             
             if success_count > 0:
                 self.finished.emit(True, "Processing completed successfully")
@@ -277,13 +428,12 @@ class AddMetadataGUI(QMainWindow):
         layout.addWidget(file_group)
         layout.addSpacing(5)
         
-        # SRT Subtitle Settings
-        srt_group = QGroupBox("SRT Subtitle Files")
-        srt_layout = QVBoxLayout()
+        # Column selection - independent group
+        col_group = QGroupBox("Metadata Columns")
+        col_layout = QVBoxLayout()
         
-        # Column selection header
         col_header = QHBoxLayout()
-        col_header.addWidget(QLabel("Select Metadata to Export:"))
+        col_header.addWidget(QLabel("Select Columns to Export:"))
         
         select_all_btn = QPushButton("Select All")
         select_all_btn.setMaximumWidth(80)
@@ -302,9 +452,8 @@ class AddMetadataGUI(QMainWindow):
         col_header.addWidget(refresh_btn)
         
         col_header.addStretch()
-        srt_layout.addLayout(col_header)
+        col_layout.addLayout(col_header)
         
-        # Scrollable checkbox area for columns
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setMaximumHeight(150)
@@ -315,43 +464,75 @@ class AddMetadataGUI(QMainWindow):
         self.column_checkbox_layout.setContentsMargins(5, 5, 5, 5)
         
         scroll.setWidget(self.column_checkbox_widget)
-        srt_layout.addWidget(scroll)
+        col_layout.addWidget(scroll)
         
-        # Output directory selection
-        output_row = QHBoxLayout()
-        output_row.addWidget(QLabel("SRT Output Directory:"))
-        self.output_dir_input = QLineEdit(str(Path.home() / "Downloads/"))
-        self.output_dir_input.setPlaceholderText("Directory for SRT files")
-        output_row.addWidget(self.output_dir_input)
+        col_group.setLayout(col_layout)
+        layout.addWidget(col_group)
+        layout.addSpacing(5)
         
-        browse_output_btn = QPushButton("Browse...")
-        browse_output_btn.setMaximumWidth(100)
-        browse_output_btn.clicked.connect(self.browse_output_dir)
-        output_row.addWidget(browse_output_btn)
+        # FCPXML export
+        fcpxml_group = QGroupBox("FCPXML Titles")
+        fcpxml_layout = QVBoxLayout()
         
-        srt_layout.addLayout(output_row)
+        self.fcpxml_enable = QCheckBox("Export FCPXML title files")
+        self.fcpxml_enable.setChecked(True)
+        self.fcpxml_enable.toggled.connect(self.toggle_fcpxml)
+        fcpxml_layout.addWidget(self.fcpxml_enable)
         
-        info_label = QLabel("ℹ️  SRT files will be named after column headers")
-        info_label.setStyleSheet("color: #666; font-size: 10px;")
-        srt_layout.addWidget(info_label)
+        fcpxml_output_row = QHBoxLayout()
+        fcpxml_output_row.addWidget(QLabel("Output Directory:"))
+        self.fcpxml_output_dir_input = QLineEdit(str(Path.home() / "Downloads/"))
+        self.fcpxml_output_dir_input.setPlaceholderText("Directory for FCPXML files")
+        fcpxml_output_row.addWidget(self.fcpxml_output_dir_input)
         
+        browse_fcpxml_output_btn = QPushButton("Browse...")
+        browse_fcpxml_output_btn.setMaximumWidth(100)
+        browse_fcpxml_output_btn.clicked.connect(self.browse_fcpxml_output_dir)
+        self.browse_fcpxml_output_btn = browse_fcpxml_output_btn
+        fcpxml_output_row.addWidget(browse_fcpxml_output_btn)
+        
+        fcpxml_layout.addLayout(fcpxml_output_row)
+        fcpxml_group.setLayout(fcpxml_layout)
+        layout.addWidget(fcpxml_group)
+        layout.addSpacing(5)
+        
+        # SRT export
+        srt_group = QGroupBox("SRT Subtitles")
+        srt_layout = QVBoxLayout()
+        
+        self.srt_enable = QCheckBox("Export SRT subtitle files")
+        self.srt_enable.setChecked(True)
+        self.srt_enable.toggled.connect(self.toggle_srt)
+        srt_layout.addWidget(self.srt_enable)
+        
+        srt_output_row = QHBoxLayout()
+        srt_output_row.addWidget(QLabel("Output Directory:"))
+        self.srt_output_dir_input = QLineEdit(str(Path.home() / "Downloads/"))
+        self.srt_output_dir_input.setPlaceholderText("Directory for SRT files")
+        srt_output_row.addWidget(self.srt_output_dir_input)
+        
+        browse_srt_output_btn = QPushButton("Browse...")
+        browse_srt_output_btn.setMaximumWidth(100)
+        browse_srt_output_btn.clicked.connect(self.browse_srt_output_dir)
+        self.browse_srt_output_btn = browse_srt_output_btn
+        srt_output_row.addWidget(browse_srt_output_btn)
+        
+        srt_layout.addLayout(srt_output_row)
         srt_group.setLayout(srt_layout)
         layout.addWidget(srt_group)
         layout.addSpacing(5)
         
-        # Frame Counter Settings
-        fc_group = QGroupBox("Frame Counter (Optional)")
+        # Frame Counter
+        fc_group = QGroupBox("Frame Counter")
         fc_layout = QVBoxLayout()
         
-        # Enable checkbox
         self.fc_enable = QCheckBox("Add frame counter videos to timeline")
         self.fc_enable.toggled.connect(self.toggle_frame_counter)
         fc_layout.addWidget(self.fc_enable)
         
-        # Frame counter file
         fc_file_row = QHBoxLayout()
         fc_file_row.addWidget(QLabel("Frame Counter File:"))
-        self.fc_file_input = QLineEdit()
+        self.fc_file_input = QLineEdit("")
         self.fc_file_input.setPlaceholderText("Path to frame counter video file")
         self.fc_file_input.setEnabled(False)
         fc_file_row.addWidget(self.fc_file_input)
@@ -365,7 +546,6 @@ class AddMetadataGUI(QMainWindow):
         
         fc_layout.addLayout(fc_file_row)
         
-        # First frame
         first_frame_row = QHBoxLayout()
         first_frame_row.addWidget(QLabel("Starting Frame Number:"))
         self.first_frame = QSpinBox()
@@ -377,7 +557,6 @@ class AddMetadataGUI(QMainWindow):
         first_frame_row.addStretch()
         
         fc_layout.addLayout(first_frame_row)
-        
         fc_group.setLayout(fc_layout)
         layout.addWidget(fc_group)
         layout.addSpacing(5)
@@ -407,9 +586,14 @@ class AddMetadataGUI(QMainWindow):
         self.custom_fps_input = QLineEdit()
         self.custom_fps_input.setMaximumWidth(100)
         self.custom_fps_input.setPlaceholderText("Enter FPS")
+        self.custom_fps_input.setText("")
         self.custom_fps_input.hide()
         self.custom_fps_input.textChanged.connect(self.validate_custom_fps)
         fps_row.addWidget(self.custom_fps_input)
+        
+        # Show custom input if that was the last selection
+        if self.fps_combo.currentText() == "Custom...":
+            self.custom_fps_input.show()
         
         fps_row.addStretch()
         
@@ -418,8 +602,8 @@ class AddMetadataGUI(QMainWindow):
         layout.addWidget(fps_group)
         layout.addSpacing(5)
         
-        # Add Metadata button
-        self.process_btn = QPushButton("Export Metadata to SRT")
+        # Go button
+        self.process_btn = QPushButton("Go")
         self.process_btn.setMinimumHeight(40)
         self.process_btn.clicked.connect(self.start_processing)
         layout.addWidget(self.process_btn)
@@ -584,6 +768,16 @@ class AddMetadataGUI(QMainWindow):
         self.browse_fc_btn.setEnabled(enabled)
         self.first_frame.setEnabled(enabled)
     
+    def toggle_srt(self, enabled):
+        """Enable/disable SRT export inputs."""
+        self.srt_output_dir_input.setEnabled(enabled)
+        self.browse_srt_output_btn.setEnabled(enabled)
+    
+    def toggle_fcpxml(self, enabled):
+        """Enable/disable FCPXML export inputs."""
+        self.fcpxml_output_dir_input.setEnabled(enabled)
+        self.browse_fcpxml_output_btn.setEnabled(enabled)
+    
     def browse_sheet(self):
         """Browse for Excel file."""
         path, _ = QFileDialog.getOpenFileName(
@@ -594,14 +788,23 @@ class AddMetadataGUI(QMainWindow):
         if path:
             self.sheet_input.setText(path)
     
-    def browse_output_dir(self):
-        """Browse for output directory."""
+    def browse_srt_output_dir(self):
+        """Browse for SRT output directory."""
         directory = QFileDialog.getExistingDirectory(
-            self, "Select Output Directory",
-            self.output_dir_input.text()
+            self, "Select SRT Output Directory",
+            self.srt_output_dir_input.text()
         )
         if directory:
-            self.output_dir_input.setText(directory)
+            self.srt_output_dir_input.setText(directory)
+    
+    def browse_fcpxml_output_dir(self):
+        """Browse for FCPXML output directory."""
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select FCPXML Output Directory",
+            self.fcpxml_output_dir_input.text()
+        )
+        if directory:
+            self.fcpxml_output_dir_input.setText(directory)
     
     def browse_frame_counter(self):
         """Browse for frame counter video file."""
@@ -623,22 +826,40 @@ class AddMetadataGUI(QMainWindow):
         # Get selected columns
         selected_columns = self.get_selected_columns()
         
-        # Validate at least one operation is selected
+        # Check which operations are enabled
         fc_enabled = self.fc_enable.isChecked()
-        srt_enabled = len(selected_columns) > 0
+        srt_enabled = self.srt_enable.isChecked()
+        fcpxml_enabled = self.fcpxml_enable.isChecked()
         
-        if not fc_enabled and not srt_enabled:
+        # Validate at least one operation is selected
+        if not fc_enabled and not srt_enabled and not fcpxml_enabled:
             QMessageBox.warning(self, "Error", 
                               "Please enable at least one operation:\n"
-                              "- Select metadata columns for SRT files, or\n"
+                              "- Enable SRT export, or\n"
+                              "- Enable FCPXML export, or\n"
                               "- Enable frame counter addition")
             return
         
-        # Validate output directory
-        output_dir = self.output_dir_input.text()
+        # Validate columns selected if SRT or FCPXML is enabled
+        if (srt_enabled or fcpxml_enabled) and len(selected_columns) == 0:
+            QMessageBox.warning(self, "Error", 
+                              "Please select at least one metadata column to export")
+            return
+        
+        # Validate SRT output directory if enabled
+        srt_output_dir = None
         if srt_enabled:
-            if not output_dir or not os.path.exists(output_dir):
-                QMessageBox.warning(self, "Error", "Please specify a valid output directory")
+            srt_output_dir = self.srt_output_dir_input.text()
+            if not srt_output_dir or not os.path.exists(srt_output_dir):
+                QMessageBox.warning(self, "Error", "Please specify a valid SRT output directory")
+                return
+        
+        # Validate FCPXML output directory if enabled
+        fcpxml_output_dir = None
+        if fcpxml_enabled:
+            fcpxml_output_dir = self.fcpxml_output_dir_input.text()
+            if not fcpxml_output_dir or not os.path.exists(fcpxml_output_dir):
+                QMessageBox.warning(self, "Error", "Please specify a valid FCPXML output directory")
                 return
         
         # Validate frame counter settings if enabled
@@ -664,7 +885,8 @@ class AddMetadataGUI(QMainWindow):
         self.progress.show()
         
         self.worker = MetadataWorker(
-            sheet_path, selected_columns, output_dir, fps,
+            sheet_path, selected_columns, srt_enabled, srt_output_dir,
+            fcpxml_enabled, fcpxml_output_dir, fps,
             frame_counter_path, first_frame
         )
         self.worker.progress.connect(self.update_log)
