@@ -190,7 +190,7 @@ class MetadataWorker(QThread):
             
             ts_id = f"ts{idx}"
             
-            lines.append(f'              <title ref="r2" lane="1" name="{text} - Basic Title" offset="{offset_str}" start="{start_str}" duration="{duration_str}">')
+            lines.append(f'              <title ref="r2" lane="0" name="{text} - Basic Title" offset="{offset_str}" start="{start_str}" duration="{duration_str}">')
             lines.append('                <param name="Flatten" key="9999/999166631/999166633/2/351" value="1"/>')
             lines.append('                <param name="Alignment" key="9999/999166631/999166633/2/354/3142713059/401" value="1 (Center)"/>')
             lines.append('                <param name="Alignment" key="9999/999166631/999166633/2/354/999169573/401" value="1 (Center)"/>')
