@@ -27,8 +27,8 @@ Handles multi-track occlusion (only exports what's actually visible) and transit
 
 Reads a clip inventory spreadsheet and exports selected metadata columns as:
 
-- **SRT subtitle files** for import into Resolve
-- **FCPXML title files** for Final Cut Pro
+- **SRT subtitle files** for import into Resolve as subtitle tracks
+- **FCPXML title files** for import into Resolve as basic titles
 
 Can also inject frame counter clips into the timeline at shot positions. Supports 23.976, 24, 25, 29.97, 30, and 60 fps timelines.
 
