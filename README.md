@@ -23,6 +23,15 @@ Exports all visible clips on selected video tracks to an Excel spreadsheet with:
 
 Handles multi-track occlusion (only exports what's actually visible) and transition detection.
 
+### Frame Counter
+
+Generates MP4 videos of VFX frame numbers.
+
+- Customizable dimensions (up to 3840x2160)
+- Preset and custom frame rates
+- Timecode metadata embedded via ffmpeg
+- Configurable font
+
 ### Add Metadata
 
 Reads a clip inventory spreadsheet and exports selected metadata columns as:
@@ -31,15 +40,6 @@ Reads a clip inventory spreadsheet and exports selected metadata columns as:
 - **FCPXML title files** for import into Resolve as basic titles
 
 Can also inject frame counter clips into the timeline at shot positions. Supports 23.976, 24, 25, 29.97, 30, and 60 fps timelines.
-
-### Frame Counter
-
-Generates MP4 videos with burned-in frame numbers.
-
-- Customizable dimensions (up to 3840x2160)
-- Preset and custom frame rates
-- Timecode metadata embedded via ffmpeg
-- Configurable font
 
 ## Installation
 
