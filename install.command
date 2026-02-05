@@ -50,24 +50,18 @@ fi
 echo "✓ Found Python $PYTHON_VERSION"
 echo "  Using: $PYTHON_CMD"
 
-# Check architecture - detect actual Python binary architecture
-SYSTEM_ARCH=$(uname -m)
+# Check architecture - detect what architecture Python is actually running as
 PYTHON_ARCH=$($PYTHON_CMD -c "import platform; print(platform.machine())")
 
-# Get the actual architecture of the Python binary itself
-PYTHON_BINARY_ARCH=$(file "$($PYTHON_CMD -c 'import sys; print(sys.executable)')" | grep -o 'arm64\|x86_64' | head -1)
+echo "  Python running as: $PYTHON_ARCH"
 
-echo "  System reports: $SYSTEM_ARCH"  
-echo "  Python reports: $PYTHON_ARCH"
-echo "  Python binary: $PYTHON_BINARY_ARCH"
-
-# Use the binary architecture as source of truth
-if [ "$PYTHON_BINARY_ARCH" = "arm64" ]; then
+# Use the runtime architecture to determine pip installation method
+if [ "$PYTHON_ARCH" = "arm64" ]; then
     echo "  → Using native ARM64 mode"
     USE_ARCH_PREFIX=false
-elif [ "$PYTHON_BINARY_ARCH" = "x86_64" ]; then
+elif [ "$PYTHON_ARCH" = "x86_64" ]; then
     echo "  → Using x86_64 mode"
-    USE_ARCH_PREFIX=false
+    USE_ARCH_PREFIX=true
 else
     echo "  → Could not determine architecture, using default"
     USE_ARCH_PREFIX=false
@@ -113,7 +107,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Install packages with appropriate architecture handling
-if [ "$USE_ROSETTA_MODE" = true ]; then
+if [ "$USE_ARCH_PREFIX" = true ]; then
     echo "  Installing packages for x86_64 architecture (Rosetta mode)..."
     # Force x86_64 architecture for all pip installs
     arch -x86_64 pip install \
@@ -189,5 +183,3 @@ echo "      set up their personal Resolve bridge scripts."
 echo ""
 echo "In DaVinci Resolve:"
 echo "  Workspace → Scripts → Edit → [Tool Name]"
-echo ""
-read -p "Press Enter to exit..."
