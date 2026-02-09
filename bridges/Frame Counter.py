@@ -15,7 +15,7 @@ def main():
     gui_script = theia_dir / "frame_counter_gui.py"
     
     # Write diagnostic info immediately
-    log_file = Path.home() / "Desktop" / "theia_bridge_log.txt"
+    log_file = theia_dir / "log" / "theia_bridge_log.txt"
     
     try:
         with open(log_file, "w") as f:
@@ -59,7 +59,7 @@ def main():
             f.write("Launching GUI...\n")
             
             # Launch GUI - force architecture to match PIL if needed
-            gui_log = Path.home() / "Desktop" / "theia_gui_log.txt"
+            gui_log = theia_dir / "log" / "theia_gui_log.txt"
             
             with open(gui_log, "w") as gui_out:
                 if pil_arch == "x86_64":

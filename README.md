@@ -1,6 +1,6 @@
 # Theia 明察秋毫
 
-❤️ 🍵 [Buy Ming a tea to show your support](https://buymeacoffee.com/ming_qiu)
+💚 🍵 [Buy Ming a tea to show your support](https://buymeacoffee.com/ming_qiu)
 
 A suite of VFX editorial tools for DaVinci Resolve Studio.
 

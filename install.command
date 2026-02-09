@@ -141,6 +141,9 @@ echo "Installing Theia tools..."
 # Create resources directory
 mkdir -p "$THEIA_DIR/resources"
 
+# Create log directory
+mkdir -p "$THEIA_DIR/log"
+
 # Copy GUI scripts
 for gui_script in "$INSTALLER_DIR"/scripts/*_gui.py; do
     if [ -f "$gui_script" ]; then
