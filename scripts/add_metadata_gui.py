@@ -34,6 +34,19 @@ except ImportError:
         dvr = None
 
 
+def get_timeline_fps(timeline):
+    fps_str = timeline.GetSetting("timelineFrameRate") or ""
+    try:
+        fps = float(fps_str)
+        return fps
+    except Exception:
+        return 24.0
+
+def fps_to_str(fps):
+    if float(fps).is_integer():
+        return str(int(round(fps)))
+    return f"{fps:.3f}".rstrip('0').rstrip('.')
+
 class MetadataWorker(QThread):
     """Threaded worker for processing metadata and frame counters."""
     progress = Signal(str)
@@ -570,14 +583,7 @@ class AddMetadataGUI(QMainWindow):
         
         self.fps_combo = QComboBox()
         self.fps_combo.setMaximumWidth(120)
-        self.fps_combo.addItems([
-            "23.976",
-            "24",
-            "25",
-            "30",
-            "60",
-            "Custom..."
-        ])
+        self.fps_combo.addItems(["23.976", "24", "25", "30", "60", "Custom..."])
         self.fps_combo.setCurrentText("24")
         self.fps_combo.currentTextChanged.connect(self.on_fps_changed)
         fps_row.addWidget(self.fps_combo)
@@ -591,6 +597,37 @@ class AddMetadataGUI(QMainWindow):
         self.custom_fps_input.textChanged.connect(self.validate_custom_fps)
         fps_row.addWidget(self.custom_fps_input)
         
+        if dvr is None:
+            self.log.append("⚠️  DaVinci Resolve API not available")
+            return
+
+        try:
+            resolve = dvr.scriptapp("Resolve")
+            if not resolve:
+                self.log.append("⚠️  Could not connect to Resolve")
+                return
+
+            project = resolve.GetProjectManager().GetCurrentProject()
+            if not project:
+                self.log.append("⚠️  No project open")
+                return
+
+            timeline = project.GetCurrentTimeline()
+            if not timeline:
+                self.log.append("⚠️  No timeline open")
+                return
+
+            fps = get_timeline_fps(timeline)
+            fps_str = fps_to_str(fps)
+            idx = self.fps_combo.findText(fps_str)
+            if idx >= 0:
+                self.fps_combo.setCurrentIndex(idx)
+            else:
+                self.fps_combo.setCurrentText("Custom...")
+                self.custom_fps_input.setText(str(fps))
+        except Exception as e:
+            self.log.append(f"⚠️  Resolve connection error: {e}")
+
         # Show custom input if that was the last selection
         if self.fps_combo.currentText() == "Custom...":
             self.custom_fps_input.show()
