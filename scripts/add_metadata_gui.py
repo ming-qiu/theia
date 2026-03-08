@@ -52,9 +52,10 @@ class MetadataWorker(QThread):
     progress = Signal(str)
     finished = Signal(bool, str)
     
-    def __init__(self, sheet_path, selected_columns, srt_enabled, srt_output_dir, 
+    def __init__(self, sheet_path, selected_columns, srt_enabled, srt_output_dir,
                  fcpxml_enabled, fcpxml_output_dir, fps,
-                 frame_counter_path=None, first_frame=None):
+                 frame_counter_path=None, first_frame=None,
+                 shot_code_col_idx=None):
         super().__init__()
         self.sheet_path = sheet_path
         self.selected_columns = selected_columns  # List of (column_index, column_name) tuples
@@ -65,6 +66,7 @@ class MetadataWorker(QThread):
         self.fps = fps
         self.frame_counter_path = frame_counter_path
         self.first_frame = first_frame
+        self.shot_code_col_idx = shot_code_col_idx
     
     def log(self, msg):
         self.progress.emit(msg)
@@ -284,26 +286,27 @@ class MetadataWorker(QThread):
             
             # Read shot data
             clips_to_add = []
+            shot_codes = []
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if len(row) < 5:
                     continue
-                
+
                 # Check if any metadata exists in column G onwards (index 6+)
                 has_metadata = False
                 for cell_value in row[6:]:  # Column G is index 6
                     if cell_value and str(cell_value).strip():
                         has_metadata = True
                         break
-                
+
                 # Skip this shot if no metadata
                 if not has_metadata:
                     continue
-                
+
                 record_tc_in = Timecode(self.fps, str(row[3]))   # Column D
                 record_tc_out = Timecode(self.fps, str(row[4]))  # Column E
-                
+
                 shot_duration = record_tc_out.frames - record_tc_in.frames
-                
+
                 clips_to_add.append({
                     "mediaPoolItem": frame_counter_item,
                     "startFrame": self.first_frame - fc_first_frame,
@@ -311,12 +314,31 @@ class MetadataWorker(QThread):
                     "trackIndex": target_track,
                     "recordFrame": record_tc_in.frames - 1
                 })
-            
+
+                # Collect shot code for renaming
+                shot_code = ""
+                if self.shot_code_col_idx is not None and len(row) > self.shot_code_col_idx:
+                    val = row[self.shot_code_col_idx]
+                    if val and str(val).strip():
+                        shot_code = str(val).strip()
+                shot_codes.append(shot_code)
+
             self.log(f"Adding {len(clips_to_add)} frame counter clips...")
             result = mediapool.AppendToTimeline(clips_to_add)
-            
+
             if result:
                 self.log(f"Success! Added {len(result)} frame counter clips to track {target_track}")
+
+                # Rename timeline items with shot codes
+                if self.shot_code_col_idx is not None:
+                    renamed = 0
+                    for i, item in enumerate(result):
+                        if i < len(shot_codes) and shot_codes[i]:
+                            item.SetName(shot_codes[i])
+                            renamed += 1
+                    if renamed > 0:
+                        self.log(f"Renamed {renamed} clip(s) with VFX shot codes")
+
                 return True
             else:
                 self.log("ERROR: Failed to add clips to timeline")
@@ -401,8 +423,8 @@ class AddMetadataGUI(QMainWindow):
 
     def setup_ui(self):
         self.setWindowTitle("Theia - Add Metadata")
-        self.setMinimumWidth(750)
-        self.setMinimumHeight(700)
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(1000)
         
         self.column_checkboxes = []
         self.available_columns = []  # List of (index, name) tuples
@@ -434,6 +456,7 @@ class AddMetadataGUI(QMainWindow):
         self.sheet_input.textChanged.connect(self.on_excel_file_changed)
         file_row.addWidget(self.sheet_input)
         browse_sheet_btn = QPushButton("Browse...")
+        browse_sheet_btn.setMaximumWidth(100)
         browse_sheet_btn.clicked.connect(self.browse_sheet)
         file_row.addWidget(browse_sheet_btn)
         file_layout.addLayout(file_row)
@@ -470,7 +493,7 @@ class AddMetadataGUI(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setMaximumHeight(150)
-        scroll.setMinimumHeight(60)
+        scroll.setMinimumHeight(80)
         
         self.column_checkbox_widget = QWidget()
         self.column_checkbox_layout = QVBoxLayout(self.column_checkbox_widget)
@@ -568,8 +591,18 @@ class AddMetadataGUI(QMainWindow):
         self.first_frame.setEnabled(False)
         first_frame_row.addWidget(self.first_frame)
         first_frame_row.addStretch()
-        
+
         fc_layout.addLayout(first_frame_row)
+
+        shot_code_row = QHBoxLayout()
+        shot_code_row.addWidget(QLabel("VFX Shot Code Column:"))
+        self.shot_code_combo = QComboBox()
+        self.shot_code_combo.setEnabled(False)
+        self.shot_code_combo.addItem("(None)", None)
+        shot_code_row.addWidget(self.shot_code_combo)
+        shot_code_row.addStretch()
+
+        fc_layout.addLayout(shot_code_row)
         fc_group.setLayout(fc_layout)
         layout.addWidget(fc_group)
         layout.addSpacing(5)
@@ -710,19 +743,23 @@ class AddMetadataGUI(QMainWindow):
             cb.deleteLater()
         self.column_checkboxes.clear()
         self.available_columns.clear()
-        
+
+        # Clear and repopulate shot code combo
+        self.shot_code_combo.clear()
+        self.shot_code_combo.addItem("(None)", None)
+
         sheet_path = self.sheet_input.text()
         if not sheet_path or not os.path.exists(sheet_path):
             self.add_column_checkbox(6, "G", "(No file loaded)", enabled=False)
             return
-        
+
         try:
             wb = load_workbook(sheet_path, read_only=True)
             ws = wb.active
-            
+
             # Read headers from first row, starting at column G (index 7, 0-indexed)
             headers = list(ws.iter_rows(min_row=1, max_row=1, values_only=True))[0]
-            
+
             found_columns = False
             for col_idx in range(6, len(headers)):  # Start from column G (index 6)
                 header = headers[col_idx]
@@ -731,19 +768,20 @@ class AddMetadataGUI(QMainWindow):
                     col_name = str(header).strip()
                     self.available_columns.append((col_idx, col_name))
                     self.add_column_checkbox(col_idx, col_letter, col_name, checked=True)
+                    self.shot_code_combo.addItem(f"[{col_letter}] {col_name}", col_idx)
                     found_columns = True
-            
+
             wb.close()
-            
+
             if not found_columns:
                 self.add_column_checkbox(6, "G", "(No metadata columns found)", enabled=False)
-                self.log.append("⚠️  No non-empty column headers found from column G onwards")
+                self.log.append("No non-empty column headers found from column G onwards")
             else:
-                self.log.append(f"✓ Loaded {len(self.available_columns)} metadata column(s)")
-        
+                self.log.append(f"Loaded {len(self.available_columns)} metadata column(s)")
+
         except Exception as e:
             self.add_column_checkbox(6, "G", f"(Error: {str(e)})", enabled=False)
-            self.log.append(f"⚠️  Could not load columns: {e}")
+            self.log.append(f"Could not load columns: {e}")
     
     def add_column_checkbox(self, col_idx, col_letter, col_name, checked=False, enabled=True):
         """Add a checkbox for a column."""
@@ -804,6 +842,7 @@ class AddMetadataGUI(QMainWindow):
         self.fc_file_input.setEnabled(enabled)
         self.browse_fc_btn.setEnabled(enabled)
         self.first_frame.setEnabled(enabled)
+        self.shot_code_combo.setEnabled(enabled)
     
     def toggle_srt(self, enabled):
         """Enable/disable SRT export inputs."""
@@ -921,10 +960,16 @@ class AddMetadataGUI(QMainWindow):
         self.progress.setRange(0, 0)
         self.progress.show()
         
+        # Get shot code column index if frame counter is enabled
+        shot_code_col_idx = None
+        if fc_enabled:
+            shot_code_col_idx = self.shot_code_combo.currentData()
+
         self.worker = MetadataWorker(
             sheet_path, selected_columns, srt_enabled, srt_output_dir,
             fcpxml_enabled, fcpxml_output_dir, fps,
-            frame_counter_path, first_frame
+            frame_counter_path, first_frame,
+            shot_code_col_idx=shot_code_col_idx
         )
         self.worker.progress.connect(self.update_log)
         self.worker.finished.connect(self.processing_done)
