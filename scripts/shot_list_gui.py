@@ -55,14 +55,6 @@ def safe_get(d, k, default=None):
     except Exception:
         return default
 
-def title_clip_text(item):
-    """Extract text from a Basic Title / Fusion Title clip on a video track."""
-    props = item.GetProperty() or {}
-    text = safe_get(props, "Text", "")
-    if not text:
-        text = item.GetName() or ""
-    return text.strip()
-
 def element_name_for_track(idx):
     if idx == 1:
         return "ScanBg"
@@ -340,13 +332,11 @@ class ShotListWorker(QThread):
     progress = Signal(str)
     finished = Signal(bool, str)
 
-    def __init__(self, shot_code_track, frame_counter_track, bg_track,
-                 bottom_track, top_track, cut_in_frame, old_excel_path,
-                 work_handle, scan_handle, output_path, input_sequence, fps):
+    def __init__(self, frame_counter_track, bottom_track, top_track,
+                 cut_in_frame, old_excel_path, work_handle, scan_handle,
+                 output_path, input_sequence, fps):
         super().__init__()
-        self.shot_code_track = shot_code_track
         self.frame_counter_track = frame_counter_track
-        self.bg_track = bg_track
         self.bottom_track = bottom_track
         self.top_track = top_track
         self.cut_in_frame = cut_in_frame
@@ -392,105 +382,48 @@ class ShotListWorker(QThread):
                 old_shots_dict = load_old_shot_list_excel(self.old_excel_path, fps)
                 self.log(f"  Found {len(old_shots_dict)} shots in old Excel")
 
-            # Get shot code items from title clips on video track
-            shot_items = timeline.GetItemListInTrack("video", self.shot_code_track) or []
-            if not shot_items:
+            # Get frame counter clips (define shot boundaries, shot codes, and frame numbers)
+            fc_items = timeline.GetItemListInTrack("video", self.frame_counter_track) or []
+            if not fc_items:
                 self.finished.emit(False,
-                    f"No clips found on Shot Code Track {self.shot_code_track}")
+                    f"No clips found on Frame Counter Track {self.frame_counter_track}")
                 return
-            shot_items_sorted = sorted(shot_items, key=lambda c: c.GetStart(False))
-            self.log(f"Found {len(shot_items_sorted)} shot code clips on track {self.shot_code_track}")
-
-            # Get frame counter clips if Mode A
-            counters = None
-            if self.frame_counter_track is not None:
-                counters = timeline.GetItemListInTrack("video", self.frame_counter_track) or []
-                self.log(f"Frame counter track {self.frame_counter_track}: {len(counters)} clips")
+            fc_items_sorted = sorted(fc_items, key=lambda c: c.GetStart(False))
+            self.log(f"Found {len(fc_items_sorted)} frame counter clips on track {self.frame_counter_track}")
 
             # Pre-pull video items for element tracks
             v_tracks = timeline.GetTrackCount("video")
             element_labels = {i: element_name_for_track(i) for i in range(1, v_tracks + 1)}
 
-            skip_tracks = {self.shot_code_track}
-            if self.frame_counter_track is not None:
-                skip_tracks.add(self.frame_counter_track)
+            skip_tracks = {self.frame_counter_track}
 
             track_items = {}
             for i in range(self.bottom_track, self.top_track + 1):
                 if i not in skip_tracks:
                     track_items[i] = timeline.GetItemListInTrack("video", i) or []
 
-            # Also pre-pull BG track items for Mode B if needed
-            bg_items_all = None
-            if self.frame_counter_track is None and self.bg_track is not None:
-                bg_items_all = timeline.GetItemListInTrack("video", self.bg_track) or []
-
             # Process each shot
             shots_rows = []
             elements_rows = []
             cut_order = 0
 
-            for shot_item in shot_items_sorted:
-                shot_code = title_clip_text(shot_item)
+            for fc_item in fc_items_sorted:
+                shot_code = (fc_item.GetName() or "").strip()
                 if not shot_code:
                     continue
 
                 cut_order += 1
-                shot_start = shot_item.GetStart(False)
-                shot_end = shot_item.GetEnd(False)
+                shot_start = fc_item.GetStart(False)
+                shot_end = fc_item.GetEnd(False)
                 shot_dur = shot_end - shot_start
 
                 self.log(f"==== Cut {cut_order}: {shot_code} [{shot_start}-{shot_end}] ====")
 
-                # Determine cut_in and cut_out
-                cut_in = None
-                cut_out = None
-
-                if counters is not None:
-                    # MODE A: Frame counter track
-                    for counter in counters:
-                        cs = counter.GetStart(False)
-                        ce = counter.GetEnd(False)
-                        if cs >= shot_start and ce <= shot_end:
-                            tc_info = get_clip_tc(counter, fps)
-                            cut_in = tc_info['ClipInFrames']
-                            cut_out = tc_info['ClipOutFrames'] - 1
-                            self.log(f"  Counter: Cut In={cut_in}, Cut Out={cut_out}")
-                            break
-                    if cut_in is None:
-                        self.log(f"  WARNING: No counter clip found, using default {self.cut_in_frame}")
-                        cut_in = self.cut_in_frame
-                        cut_out = cut_in + shot_dur - 1
-                else:
-                    # MODE B: BG track fallback
-                    bg_clips_in_shot = []
-                    for clip in (bg_items_all or []):
-                        cs = clip.GetStart(False)
-                        ce = clip.GetEnd(False)
-                        if cs >= shot_start and ce <= shot_end:
-                            bg_clips_in_shot.append(clip)
-
-                    if bg_clips_in_shot:
-                        earliest_bg = min(bg_clips_in_shot, key=lambda c: c.GetStart(False))
-                        bg_tc_info = get_clip_tc(earliest_bg, fps)
-                        current_bg_source_frames = bg_tc_info['ClipInFrames']
-
-                        if (old_shots_dict
-                                and shot_code in old_shots_dict
-                                and old_shots_dict[shot_code]['CutIn'] is not None
-                                and old_shots_dict[shot_code]['CutInTCFrames'] is not None):
-                            old = old_shots_dict[shot_code]
-                            cut_in = old['CutIn'] + (current_bg_source_frames - old['CutInTCFrames'])
-                            cut_out = cut_in + shot_dur - 1
-                            self.log(f"  BG mapped from old: Cut In={cut_in}, Cut Out={cut_out}")
-                        else:
-                            cut_in = self.cut_in_frame
-                            cut_out = cut_in + shot_dur - 1
-                            self.log(f"  BG default: Cut In={cut_in}, Cut Out={cut_out}")
-                    else:
-                        cut_in = self.cut_in_frame
-                        cut_out = cut_in + shot_dur - 1
-                        self.log(f"  WARNING: No BG clips found, using default {self.cut_in_frame}")
+                # Get frame numbers from the frame counter clip's source TC
+                tc_info = get_clip_tc(fc_item, fps)
+                cut_in = tc_info['ClipInFrames']
+                cut_out = tc_info['ClipOutFrames'] - 1
+                self.log(f"  Cut In={cut_in}, Cut Out={cut_out}")
 
                 # Collect elements on [bottom..top] tracks
                 elements_by_track = defaultdict(list)
@@ -498,6 +431,7 @@ class ShotListWorker(QThread):
                 for track in range(self.bottom_track, self.top_track + 1):
                     if track in skip_tracks:
                         continue
+
                     for clip in (track_items.get(track) or []):
                         clip_start = clip.GetStart(False)
                         clip_end = clip.GetEnd(False)
@@ -514,8 +448,23 @@ class ShotListWorker(QThread):
                             clip_in_tc_frames = tc_info["ClipInFrames"]
                             clip_out_tc_frames = tc_info["ClipOutFrames"]
 
-                            clip_in = int(cut_in + (clip_start - shot_start))
-                            clip_out = int(clip_in + (clip_out_tc_frames - clip_in_tc_frames)) - 1
+                            if track == self.bottom_track:
+                                # BG: use frame counter cut_in and source TC duration
+                                clip_in = int(cut_in + (clip_start - shot_start))
+                                clip_out = int(clip_in + (clip_out_tc_frames - clip_in_tc_frames)) - 1
+                            else:
+                                # Non-BG: find the BG clip this element overlaps with
+                                matching_bg = None
+                                for bg in elements_by_track.get(self.bottom_track, []):
+                                    if bg["TimelineStart"] <= clip_start < bg["TimelineEnd"]:
+                                        matching_bg = bg
+                                        break
+                                if matching_bg:
+                                    clip_in = int(matching_bg["ClipIn"] + (clip_start - matching_bg["TimelineStart"]))
+                                    clip_out = int(matching_bg["ClipIn"] + (clip_end - matching_bg["TimelineStart"])) - 1
+                                else:
+                                    clip_in = int(cut_in + (clip_start - shot_start))
+                                    clip_out = int(cut_in + (clip_end - shot_start)) - 1
 
                             props = clip.GetProperty() or {}
                             scalerpo_sum = summarize_scale_repo(props)
@@ -541,7 +490,7 @@ class ShotListWorker(QThread):
                                 "Props": props,
                                 "ClipProps": clip_props,
                                 "HeadIn": int(clip_in - self.scan_handle),
-                                "TailOut": int((clip_out_tc_frames - clip_in_tc_frames) + clip_in + self.scan_handle),
+                                "TailOut": int(clip_out + 1 + self.scan_handle),
                             })
 
                 # Shot metadata from BG elements
@@ -706,36 +655,14 @@ class ShotListGUI(QMainWindow):
         track_group = QGroupBox("Track Configuration")
         track_layout = QVBoxLayout()
 
-        # Shot Code Track
-        sc_row = QHBoxLayout()
-        sc_row.addWidget(QLabel("Shot Code Track:"))
-        self.shot_code_track_combo = QComboBox()
-        self.shot_code_track_combo.setMinimumWidth(200)
-        sc_row.addWidget(self.shot_code_track_combo)
-        sc_row.addStretch()
-        track_layout.addLayout(sc_row)
-
         # Frame Counter Track
         fc_row = QHBoxLayout()
         fc_row.addWidget(QLabel("Frame Counter Track:"))
         self.counter_track_combo = QComboBox()
         self.counter_track_combo.setMinimumWidth(200)
-        self.counter_track_combo.currentTextChanged.connect(self.on_counter_track_changed)
         fc_row.addWidget(self.counter_track_combo)
         fc_row.addStretch()
         track_layout.addLayout(fc_row)
-
-        # BG Track (visible only when counter = None)
-        bg_row = QHBoxLayout()
-        self.bg_track_label = QLabel("BG Track:")
-        bg_row.addWidget(self.bg_track_label)
-        self.bg_track_combo = QComboBox()
-        self.bg_track_combo.setMinimumWidth(200)
-        bg_row.addWidget(self.bg_track_combo)
-        bg_row.addStretch()
-        track_layout.addLayout(bg_row)
-        self.bg_track_label.hide()
-        self.bg_track_combo.hide()
 
         # Bottom / Top tracks
         bt_row = QHBoxLayout()
@@ -888,11 +815,7 @@ class ShotListGUI(QMainWindow):
 
     def populate_tracks(self):
         """Populate track dropdowns from the current Resolve timeline."""
-        self.shot_code_track_combo.clear()
         self.counter_track_combo.clear()
-        self.bg_track_combo.clear()
-
-        self.counter_track_combo.addItem("None", None)
 
         if dvr is None:
             self.log.append("⚠️  DaVinci Resolve API not available")
@@ -920,9 +843,7 @@ class ShotListGUI(QMainWindow):
             for i in range(1, track_count + 1):
                 name = timeline.GetTrackName("video", i) or ""
                 label = f"Track {i}" + (f" ({name})" if name else "")
-                self.shot_code_track_combo.addItem(label, i)
                 self.counter_track_combo.addItem(label, i)
-                self.bg_track_combo.addItem(label, i)
 
             # Try to auto-detect FPS from timeline
             try:
@@ -940,12 +861,6 @@ class ShotListGUI(QMainWindow):
 
         except Exception as e:
             self.log.append(f"⚠️  Resolve connection error: {e}")
-
-    def on_counter_track_changed(self, text):
-        """Show/hide BG track based on counter track selection."""
-        is_none = (text == "None")
-        self.bg_track_label.setVisible(is_none)
-        self.bg_track_combo.setVisible(is_none)
 
     def on_fps_changed(self, text):
         if text == "Custom...":
@@ -1002,22 +917,10 @@ class ShotListGUI(QMainWindow):
             QMessageBox.warning(self, "Error", "Please enter a valid FPS value")
             return
 
-        shot_code_track = self.shot_code_track_combo.currentData()
-        if shot_code_track is None:
-            QMessageBox.warning(self, "Error", "Please select a Shot Code Track")
+        frame_counter_track = self.counter_track_combo.currentData()
+        if frame_counter_track is None:
+            QMessageBox.warning(self, "Error", "Please select a Frame Counter Track")
             return
-
-        counter_text = self.counter_track_combo.currentText()
-        if counter_text == "None":
-            frame_counter_track = None
-            bg_track = self.bg_track_combo.currentData()
-            if bg_track is None:
-                QMessageBox.warning(self, "Error",
-                    "When Frame Counter Track is None, please select a BG Track")
-                return
-        else:
-            frame_counter_track = self.counter_track_combo.currentData()
-            bg_track = None
 
         output = self.output_input.text()
         if not output:
@@ -1036,9 +939,7 @@ class ShotListGUI(QMainWindow):
         self.progress.show()
 
         self.worker = ShotListWorker(
-            shot_code_track=shot_code_track,
             frame_counter_track=frame_counter_track,
-            bg_track=bg_track,
             bottom_track=self.bottom_spin.value(),
             top_track=self.top_spin.value(),
             cut_in_frame=self.cut_in_spin.value(),
