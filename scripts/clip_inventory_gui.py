@@ -584,7 +584,7 @@ class ClipInventoryGUI(QMainWindow):
         track_header.addWidget(select_all_btn)
         
         deselect_all_btn = QPushButton("Deselect All")
-        deselect_all_btn.setMaximumWidth(90)
+        deselect_all_btn.setMaximumWidth(100)
         deselect_all_btn.clicked.connect(self.deselect_all_tracks)
         track_header.addWidget(deselect_all_btn)
         
