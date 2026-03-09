@@ -94,11 +94,12 @@ class FrameCounterWorker(QThread):
             start_timecode = str(tc)
             self.log(f"Setting start timecode to: {start_timecode}")
 
-            # Burn timecode metadata via ffmpeg
-            video_path = os.path.join(self.output_dir, f"frame_counter_{fps_label}fps.mp4")
+            # Burn timecode metadata via ffmpeg (MOV container supports timecode tracks)
+            video_path = os.path.join(self.output_dir, f"frame_counter_{fps_label}fps.mov")
 
+            ffmpeg_bin = shutil.which('ffmpeg') or '/opt/homebrew/bin/ffmpeg'
             ffmpeg_cmd = [
-                'ffmpeg', '-i', temp_video_path,
+                ffmpeg_bin, '-i', temp_video_path,
                 '-c', 'copy',
                 '-timecode', start_timecode,
                 '-y',
