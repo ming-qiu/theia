@@ -11,7 +11,7 @@ from timecode import Timecode
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit, QComboBox, QFileDialog,
+    QPushButton, QLabel, QLineEdit, QFileDialog,
     QMessageBox, QProgressBar, QTextEdit, QCheckBox, QScrollArea
 )
 from PySide6.QtCore import Qt, QThread, Signal, QUrl
@@ -25,7 +25,6 @@ from PIL import Image as PILImage
 try:
     import DaVinciResolveScript as dvr
 except ImportError:
-    import sys
     resolve_script_api = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
     if resolve_script_api not in sys.path:
         sys.path.append(resolve_script_api)
@@ -82,10 +81,6 @@ class ExportWorker(QThread):
     def log(self, msg):
         self.progress.emit(msg)
     
-    def get_timeline_duration_frames(self, timeline):
-        """Get timeline duration in frames."""
-        return timeline.GetEndFrame() - timeline.GetStartFrame()
-
     def get_visible_clips(self, timeline):
         """Get all visible clips considering track layering, but ignore transitions.
         Handles dissolves/transitions by classifying them into:
@@ -119,8 +114,11 @@ class ExportWorker(QThread):
                 return False
 
         # Pre-scan to compute per-clip start adjustments for type-3 (beginning-of-clip) transitions
-        start_adjustments = {}    # clip_id -> frames to add to clip start
-        transition_ids = set()    # skip these items later
+        # Use (track, start, end) tuples as keys instead of id() to avoid
+        # Python object id reuse after garbage collection.
+        start_adjustments = {}    # (track, start, end) -> frames to add to clip start
+        end_adjustments = {}      # (track, start, end) -> frames to subtract from clip end
+        transition_keys = set()   # (track, start, end) keys for transition items
 
         for track_num in range(1, track_count + 1):
             # skip tracks not in selection if the user selected tracks
@@ -133,10 +131,11 @@ class ExportWorker(QThread):
                 if not is_transition_item(item):
                     continue
 
-                transition_ids.add(id(item))
                 trans_start = item.GetStart()
                 trans_end = item.GetEnd()
+                transition_keys.add((track_num, int(trans_start), int(trans_end)))
                 trans_len = max(0, int(trans_end - trans_start))
+                adj = int(round(0.5 * trans_len))
 
                 prev_item = clips[i - 1] if i - 1 >= 0 else None
                 next_item = clips[i + 1] if i + 1 < len(clips) else None
@@ -145,31 +144,30 @@ class ExportWorker(QThread):
                 overlaps_prev = prev_item is not None and (prev_item.GetEnd() > trans_start)
                 overlaps_next = next_item is not None and (next_item.GetStart() < trans_end)
 
-                # Type1: overlaps both -> connecting two clips on same track (ignore for now)
+                # Type1: overlaps both -> connecting two clips on same track
                 if overlaps_prev and overlaps_next:
-                    self.log(f"  Transition on track {track_num} connecting two clips ({trans_start}-{trans_end}) -> type1 (ignore)")
+                    self.log(f"  Transition on track {track_num} connecting two clips ({trans_start}-{trans_end}) -> type1: {adj} frames")
+                    if prev_item is not None:
+                        prev_key = (track_num, int(prev_item.GetStart()), int(prev_item.GetEnd()))
+                        end_adjustments[prev_key] = adj
+                    if next_item is not None:
+                        next_key = (track_num, int(next_item.GetStart()), int(next_item.GetEnd()))
+                        start_adjustments[next_key] = adj
                     continue
 
-                # Type2: overlaps previous only -> sitting at end of a clip (do nothing)
+                # Type2: overlaps previous only -> sitting at end of a clip
                 if overlaps_prev and not overlaps_next:
-                    self.log(f"  Transition on track {track_num} at end of clip ({trans_start}-{trans_end}) -> type2 (ignore)")
+                    self.log(f"  Transition on track {track_num} at end of clip ({trans_start}-{trans_end}) -> type2: {adj} frames")
+                    if prev_item is not None:
+                        prev_key = (track_num, int(prev_item.GetStart()), int(prev_item.GetEnd()))
+                        end_adjustments[prev_key] = adj
                     continue
 
-                # Type3: overlaps next only -> transition at beginning of clip; nudge next clip start
+                # Type3: overlaps next only -> transition at beginning of clip
                 if overlaps_next and not overlaps_prev and next_item is not None:
-                    adj = int(round(0.5 * trans_len))
-                    next_id = id(next_item)
-                    # ensure we do not push start past end
-                    clip_start = next_item.GetStart()
-                    clip_end = next_item.GetEnd()
-                    max_allowed = max(0, clip_end - clip_start - 1)
-                    adj = min(adj, max_allowed)
-                    if adj > 0:
-                        start_adjustments[next_id] = start_adjustments.get(next_id, 0) + adj
-                        self.log(f"  Transition on track {track_num} at start of next clip ({trans_start}-{trans_end}) -> type3: adding {adj} frames to clip id {next_id}")
-                    else:
-                        self.log(f"  Transition on track {track_num} at start of next clip ({trans_start}-{trans_end}) -> type3 but adj=0 (too short)")
-
+                    self.log(f"  Transition on track {track_num} at start of next clip ({trans_start}-{trans_end}) -> type3: {adj} frames")
+                    next_key = (track_num, int(next_item.GetStart()), int(next_item.GetEnd()))
+                    start_adjustments[next_key] = adj
                     continue
 
                 # If neither overlaps (weird case), just ignore
@@ -193,40 +191,52 @@ class ExportWorker(QThread):
             self.log(f"  Track {track_num}: Processing {len(clips)} clips")
 
             for clip in clips:
-                cid = id(clip)
-                # skip transitions entirely
-                if cid in transition_ids or is_transition_item(clip):
-                    self.log(f"    Skipping transition item {clip.GetName()} [{clip.GetStart()}-{clip.GetEnd()}]")
-                    continue
-
                 raw_start = clip.GetStart()
                 raw_end = clip.GetEnd()
+                clip_key = (track_num, int(raw_start), int(raw_end))
 
-                # Apply any start adjustment (from type3 transitions)
-                adj = start_adjustments.get(cid, 0)
-                eff_start = raw_start + adj
-                # clamp to not exceed end
-                if eff_start >= raw_end:
-                    self.log(f"    Clip {clip.GetName()} adjusted start >= end after adj ({raw_start}+{adj} >= {raw_end}) -> skipping")
+                # skip transitions entirely
+                if clip_key in transition_keys or is_transition_item(clip):
+                    self.log(f"    Skipping transition item {clip.GetName()} [{raw_start}-{raw_end}]")
                     continue
 
-                # Get visible portions of this clip (using adjusted start)
-                clip_visible = visible_regions.intersect(eff_start, raw_end)
+                # skip disabled clips
+                try:
+                    if not clip.GetClipEnabled():
+                        self.log(f"    Skipping disabled clip {clip.GetName()} [{raw_start}-{raw_end}]")
+                        continue
+                except Exception:
+                    pass
+
+                # Apply start/end adjustments from transitions
+                start_adj = start_adjustments.get(clip_key, 0)
+                end_adj = end_adjustments.get(clip_key, 0)
+                eff_start = raw_start - start_adj
+                eff_end = raw_end + end_adj
+                # clamp to ensure valid range
+                if eff_start >= eff_end:
+                    self.log(f"    Clip {clip.GetName()} adjusted range invalid ({eff_start} >= {eff_end}) -> skipping")
+                    continue
+
+                # Get visible portions of this clip (using adjusted range)
+                clip_visible = visible_regions.intersect(eff_start, eff_end)
 
                 if clip_visible:
-                    self.log(f"    {clip.GetName()} [{raw_start}-{raw_end}] (effective start {eff_start}): VISIBLE {clip_visible}")
+                    self.log(f"    {clip.GetName()} [{raw_start}-{raw_end}] (effective {eff_start}-{eff_end}): VISIBLE {clip_visible}")
                     visible_clips.append({
                         'clip': clip,
                         'track_num': track_num,
                         'clip_start': eff_start,
-                        'clip_end': raw_end,
+                        'clip_end': eff_end,
+                        'raw_start': int(raw_start),
+                        'start_adj': start_adj,
                         'visible_ranges': clip_visible
                     })
 
                     # Remove this clip's effective area from visible regions
-                    visible_regions.subtract(eff_start, raw_end)
+                    visible_regions.subtract(raw_start + start_adj, raw_end - end_adj)
                 else:
-                    self.log(f"    {clip.GetName()} [{raw_start}-{raw_end}] (effective start {eff_start}): OCCLUDED")
+                    self.log(f"    {clip.GetName()} [{raw_start}-{raw_end}] (effective {eff_start}-{eff_end}): OCCLUDED")
 
             if visible_regions.is_empty():
                 self.log(f"  All regions occluded, stopping at track {track_num}")
@@ -382,7 +392,8 @@ class ExportWorker(QThread):
                         'vis_start': vis_start,
                         'vis_end': vis_end,
                         'clip_start_record': clip_info['clip_start'],
-                        'clip_start_api': clip_info.get('api_start', clip_info['clip_start'])
+                        'raw_start': clip_info['raw_start'],
+                        'start_adj': clip_info['start_adj']
                     })
             
             # Sort by visible range start time
@@ -434,7 +445,7 @@ class ExportWorker(QThread):
                 vis_start = range_info['vis_start']
                 vis_end = range_info['vis_end']
                 clip_start_record = range_info['clip_start_record']
-                clip_start_api = range_info['clip_start_api']
+                raw_start = range_info['raw_start']
                 clip_id = id(clip)
                 
                 # Track which part this is
@@ -468,8 +479,9 @@ class ExportWorker(QThread):
                         src_tc_str = props.get('Start TC')
                         src_start = Timecode(str(src_fps), src_tc_str).frames
                         
-                        # Calculate source TC for this visible range start
-                        offset_into_clip = vis_start - clip_start_record
+                        # Calculate source TC, accounting for transition handle at in
+                        start_adj = range_info['start_adj']
+                        offset_into_clip = vis_start - clip_start_record - start_adj
                         src_tc = Timecode(src_fps, frames=int(src_start + clip.GetLeftOffset() + offset_into_clip))
                         ws.cell(row_num, 6, str(src_tc))
                     except:
@@ -477,9 +489,9 @@ class ExportWorker(QThread):
                 else:
                     ws.cell(row_num, 6, str(tc_in))
                 
-                # Thumbnail - grab at the visible start frame
+                # Thumbnail - grab past the transition so Color UI lands on the right clip
                 if media_item:
-                    thumb_frame = max(int(vis_start), int(clip_start_api))
+                    thumb_frame = raw_start + range_info['start_adj']
                     thumb = self.get_thumbnail(timeline, thumb_frame, fps, target_track_num=track_num)
                     if thumb:
                         buf = BytesIO()
@@ -493,8 +505,6 @@ class ExportWorker(QThread):
                     ws.cell(row_num, 1, "No thumbnail")
                 
                 row_num += 1
-            
-            total_rows = len(all_visible_ranges)
             
             # Save
             self.log(f"\nSaving to {self.output_path}...")
@@ -672,8 +682,8 @@ class ClipInventoryGUI(QMainWindow):
                 self.log.append("⚠️  No video tracks found - defaulting to track 1")
                 return
             
-            # Create checkboxes for each track
-            for i in range(1, track_count + 1):
+            # Create checkboxes for each track (highest on top, like Resolve)
+            for i in range(track_count, 0, -1):
                 self.add_track_checkbox(i, checked=True)
             
             self.log.append(f"✓ Found {track_count} video track(s)")
@@ -761,7 +771,7 @@ class ClipInventoryGUI(QMainWindow):
             msg_box.setIcon(QMessageBox.Information)
             
             open_btn = msg_box.addButton("Open File", QMessageBox.ActionRole)
-            close_btn = msg_box.addButton(QMessageBox.Ok)
+            msg_box.addButton(QMessageBox.Ok)
             
             msg_box.exec()
             
