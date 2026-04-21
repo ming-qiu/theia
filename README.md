@@ -34,12 +34,13 @@ Generates MP4 videos of VFX frame numbers.
 
 ### Add Metadata
 
-Reads a clip inventory spreadsheet and exports selected metadata columns as:
+Reads a clip inventory spreadsheet and works in three optional modes — all can run together in a single pass:
 
-- **SRT subtitle files** for import into Resolve as subtitle tracks
-- **FCPXML title files** for import into Resolve as basic titles
+- **FCPXML Titles** — exports selected metadata columns as FCPXML basic title files, one file per column, for import into Resolve as title tracks
+- **SRT Subtitles** — exports the same columns as SRT subtitle files for import as subtitle tracks
+- **Frame Counter** — adds a new video track to the timeline and places frame counter clips at each shot position (only for shots that have any metadata in the spreadsheet). The starting frame number is configurable. Optionally selects a VFX shot code column to rename each placed clip with its shot code — these named clips then serve as the frame counter track consumed by the Shot List tool.
 
-Can also inject frame counter clips into the timeline at shot positions, renaming each clip with the VFX shot code from a selected metadata column. Supports 23.976, 24, 25, 29.97, 30, and 60 fps timelines.
+Metadata columns are read from column G onwards in the spreadsheet. Record In/Out timecodes are read from columns D and E. Supports 23.976, 24, 25, 29.97, 30, and 60 fps timelines, with auto-detection from the open Resolve timeline.
 
 ### Shot List
 
@@ -113,12 +114,14 @@ Tools can also be run directly:
 
 ### Add metadata to timeline
 
-1. Generate a frame counter video with the **Frame Counter** tool
-2. Launch **Add Metadata** from Scripts menu
-3. Select the spreadsheet with your metadata
-4. Choose columns to export as subtitles
-5. Optionally add frame counter clips to the timeline, selecting the VFX shot code column to name each clip
-6. Import the generated SRT/FCPXML files back into Resolve
+1. Export a clip inventory with the **Clip Inventory** tool and fill in metadata columns (VFX shot codes, assignments, etc.) from column G onwards in the spreadsheet
+2. Generate a frame counter video with the **Frame Counter** tool
+3. Launch **Add Metadata** from Scripts menu
+4. Select the spreadsheet and choose which metadata columns to export
+5. Enable **FCPXML Titles** and/or **SRT Subtitles** and set output directories
+6. Enable **Frame Counter**, select the generated video, set the starting frame number, and choose the VFX shot code column to name each clip
+7. Click Go — SRT/FCPXML files are written to disk and frame counter clips are placed on a new timeline track, each named with its VFX shot code
+8. In Resolve, import the FCPXML or SRT files as needed
 
 ### Export a VFX shot list
 
