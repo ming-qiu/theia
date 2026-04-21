@@ -39,7 +39,20 @@ Reads a clip inventory spreadsheet and exports selected metadata columns as:
 - **SRT subtitle files** for import into Resolve as subtitle tracks
 - **FCPXML title files** for import into Resolve as basic titles
 
-Can also inject frame counter clips into the timeline at shot positions. Supports 23.976, 24, 25, 29.97, 30, and 60 fps timelines.
+Can also inject frame counter clips into the timeline at shot positions, renaming each clip with the VFX shot code from a selected metadata column. Supports 23.976, 24, 25, 29.97, 30, and 60 fps timelines.
+
+### Shot List
+
+Exports a structured VFX shot list from the current timeline to Excel, with two sheets:
+
+- **Shots** — one row per shot with sequence, cut order, editorial name, shot code, cut in/out frames, work in/out, cut duration, and BG/FG retime flags
+- **Elements** — one row per element per shot with element name, clip in/out frames, head in/tail out (with scan handles), reel name, scale/reposition summary, and retime details
+
+Shot boundaries, shot codes, and frame numbers all come from a single **frame counter track** — clips on that track define each shot, their names are the VFX shot codes, and their source timecode carries the frame numbering.
+
+Clip In/Out for BG elements is calculated from the frame counter source TC. Non-BG elements are calculated relative to their overlapping BG clip. Retimes are detected and summarised automatically (percentage for simple retimes, frame-mapped table for non-linear retimes across merged clips).
+
+Optionally compare against a previous shot list Excel to flag cuts that have changed.
 
 ## Installation
 
@@ -104,8 +117,16 @@ Tools can also be run directly:
 2. Launch **Add Metadata** from Scripts menu
 3. Select the spreadsheet with your metadata
 4. Choose columns to export as subtitles
-5. Optionally add frame counter clips to the timeline
+5. Optionally add frame counter clips to the timeline, selecting the VFX shot code column to name each clip
 6. Import the generated SRT/FCPXML files back into Resolve
+
+### Export a VFX shot list
+
+1. Ensure your timeline has a frame counter track with clips named by VFX shot code
+2. Launch **Shot List** from Scripts menu
+3. Select the frame counter track, element track range, and handle sizes
+4. Optionally load a previous shot list Excel to diff against
+5. Export — produces an Excel with Shots and Elements sheets
 
 ## Project Structure
 
@@ -115,11 +136,13 @@ theia/
 ├── bridges/                 # DaVinci Resolve bridge scripts
 │   ├── Add Metadata.py
 │   ├── Clip Inventory.py
-│   └── Frame Counter.py
+│   ├── Frame Counter.py
+│   └── Shot List.py
 ├── scripts/                 # GUI applications
 │   ├── add_metadata_gui.py
 │   ├── clip_inventory_gui.py
-│   └── frame_counter_gui.py
+│   ├── frame_counter_gui.py
+│   └── shot_list_gui.py
 └── resources/
     ├── fonts/
     │   └── SF-Pro-Text-Regular.otf
