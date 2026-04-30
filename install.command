@@ -10,7 +10,7 @@ echo "======================================"
 echo ""
 
 THEIA_DIR="/Library/Application Support/Theia"
-RESOLVE_DIR="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Edit"
+RESOLVE_DIR="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Edit/Theia"
 INSTALLER_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Determine which Python to use
