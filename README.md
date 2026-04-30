@@ -136,11 +136,12 @@ Tools can also be run directly:
 ```
 theia/
 ├── install.command          # macOS installer
+├── uninstall.command        # macOS uninstaller
 ├── bridges/                 # DaVinci Resolve bridge scripts
-│   ├── Add Metadata.py
-│   ├── Clip Inventory.py
-│   ├── Frame Counter.py
-│   └── Shot List.py
+│   ├── 01 Clip Inventory.py
+│   ├── 02 Frame Counter.py
+│   ├── 03 Add Metadata.py
+│   └── 04 Shot List.py
 ├── scripts/                 # GUI applications
 │   ├── add_metadata_gui.py
 │   ├── clip_inventory_gui.py
