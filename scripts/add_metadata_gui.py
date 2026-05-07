@@ -418,7 +418,7 @@ class AddMetadataGUI(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.last_export_path = None
+        self.last_output_dir = None
         self.setup_ui()
 
     def setup_ui(self):
