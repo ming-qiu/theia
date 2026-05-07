@@ -17,11 +17,13 @@ Named after the Greek Titan goddess of sight and heavenly light. 明察秋毫 �
 Exports all visible clips on selected video tracks to an Excel spreadsheet with:
 
 - Thumbnail images captured from the timeline
-- Reel names and track numbers
+- Reel names and cut orders
 - Record In/Out and Source In timecodes
-- Cut order
+- Clip durations
 
-Handles multi-track occlusion (only exports what's actually visible) and transition detection.
+_Supports messy timelines!_ Multi-track occlusion and transitions are accounted for.
+
+Once you export the Excel spreadsheet, fill in your own metadata such as VFX shot codes, VFX work, etc..
 
 ### Frame Counter
 
@@ -50,6 +52,8 @@ Exports a structured VFX shot list from the current timeline to Excel, with two 
 - **Elements** — one row per element per shot with element name, clip in/out frames, head in/tail out (with scan handles), reel name, scale/reposition summary, and retime details
 
 Shot boundaries, shot codes, and frame numbers all come from a single **frame counter track** — clips on that track define each shot, their names are the VFX shot codes, and their source timecode carries the frame numbering.
+
+_Requires clean timelines!_ Make sure to consolidate all BG elements down to one track.
 
 Clip In/Out for BG elements is calculated from the frame counter source TC. Non-BG elements are calculated relative to their overlapping BG clip. Retimes are detected and summarised automatically (percentage for simple retimes, frame-mapped table for non-linear retimes across merged clips).
 
