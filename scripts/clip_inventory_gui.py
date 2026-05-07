@@ -407,15 +407,15 @@ class ExportWorker(QThread):
             ws.title = "Shots"
             
             # Headers
-            headers = ["Thumbnail", "Reel Name", "Cut Order", "Record In", 
-                      "Record Out", "Source In", "Notes"]
+            headers = ["Thumbnail", "Reel Name", "Cut Order", "Record In",
+                      "Record Out", "Duration", "Source In", "Notes"]
             for idx, header in enumerate(headers, 1):
                 ws.cell(1, idx, header)
-            
+
             # Column widths
             ws.column_dimensions['A'].width = 34
             ws.column_dimensions['B'].width = 25
-            for col in ['C', 'D', 'E', 'F', 'G']:
+            for col in ['C', 'D', 'E', 'F', 'G', 'H']:
                 ws.column_dimensions[col].width = 15
             
             # Process clips - one row per visible range
@@ -470,6 +470,9 @@ class ExportWorker(QThread):
                 ws.cell(row_num, 4, str(tc_in))
                 ws.cell(row_num, 5, str(tc_out))
                 
+                # Duration (Record Out - Record In + 1)
+                ws.cell(row_num, 6, int(vis_end - vis_start))
+
                 # Source timecode
                 media_item = clip.GetMediaPoolItem()
                 if media_item:
@@ -478,16 +481,16 @@ class ExportWorker(QThread):
                         src_fps = float(props.get('FPS', fps))
                         src_tc_str = props.get('Start TC')
                         src_start = Timecode(str(src_fps), src_tc_str).frames
-                        
+
                         # Calculate source TC, accounting for transition handle at in
                         start_adj = range_info['start_adj']
                         offset_into_clip = vis_start - clip_start_record - start_adj
                         src_tc = Timecode(src_fps, frames=int(src_start + clip.GetLeftOffset() + offset_into_clip))
-                        ws.cell(row_num, 6, str(src_tc))
+                        ws.cell(row_num, 7, str(src_tc))
                     except:
-                        ws.cell(row_num, 6, str(tc_in))
+                        ws.cell(row_num, 7, str(tc_in))
                 else:
-                    ws.cell(row_num, 6, str(tc_in))
+                    ws.cell(row_num, 7, str(tc_in))
                 
                 # Thumbnail - grab past the transition so Color UI lands on the right clip
                 if media_item:
