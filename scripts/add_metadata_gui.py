@@ -291,9 +291,9 @@ class MetadataWorker(QThread):
                 if len(row) < 5:
                     continue
 
-                # Check if any metadata exists in column G onwards (index 6+)
+                # Check if any metadata exists in column H onwards (index 7+)
                 has_metadata = False
-                for cell_value in row[6:]:  # Column G is index 6
+                for cell_value in row[7:]:  # Column H is index 7
                     if cell_value and str(cell_value).strip():
                         has_metadata = True
                         break
@@ -757,11 +757,11 @@ class AddMetadataGUI(QMainWindow):
             wb = load_workbook(sheet_path, read_only=True)
             ws = wb.active
 
-            # Read headers from first row, starting at column G (index 7, 0-indexed)
+            # Read headers from first row, starting at column H (index 7, 0-indexed)
             headers = list(ws.iter_rows(min_row=1, max_row=1, values_only=True))[0]
 
             found_columns = False
-            for col_idx in range(6, len(headers)):  # Start from column G (index 6)
+            for col_idx in range(7, len(headers)):  # Start from column H (index 7)
                 header = headers[col_idx]
                 if header and str(header).strip():
                     col_letter = get_column_letter(col_idx + 1)
@@ -774,8 +774,8 @@ class AddMetadataGUI(QMainWindow):
             wb.close()
 
             if not found_columns:
-                self.add_column_checkbox(6, "G", "(No metadata columns found)", enabled=False)
-                self.log.append("No non-empty column headers found from column G onwards")
+                self.add_column_checkbox(7, "H", "(No metadata columns found)", enabled=False)
+                self.log.append("No non-empty column headers found from column H onwards")
             else:
                 self.log.append(f"Loaded {len(self.available_columns)} metadata column(s)")
 
