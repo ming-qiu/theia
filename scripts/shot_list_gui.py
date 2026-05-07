@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QComboBox, QFileDialog,
     QMessageBox, QProgressBar, QTextEdit, QGroupBox, QSpinBox
 )
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import Qt, QThread, Signal, QUrl
+from PySide6.QtGui import QFont, QIcon, QDesktopServices
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
@@ -54,6 +54,14 @@ def safe_get(d, k, default=None):
         return d.get(k, default)
     except Exception:
         return default
+
+def is_transition_item(tl_item):
+    """Return True if the timeline item appears to be a transition rather than a clip."""
+    try:
+        name = (tl_item.GetName() or "").lower()
+        return any(k in name for k in ("dissolve", "transition", "wipe", "fade"))
+    except Exception:
+        return False
 
 def element_name_for_track(idx):
     if idx == 1:
@@ -433,6 +441,9 @@ class ShotListWorker(QThread):
                         continue
 
                     for clip in (track_items.get(track) or []):
+                        if is_transition_item(clip):
+                            continue
+
                         clip_start = clip.GetStart(False)
                         clip_end = clip.GetEnd(False)
                         if clip_start >= shot_start and clip_end <= shot_end:
@@ -822,6 +833,7 @@ class ShotListGUI(QMainWindow):
             return
 
         try:
+            self.log.clear()
             resolve = dvr.scriptapp("Resolve")
             if not resolve:
                 self.log.append("⚠️  Could not connect to Resolve")
@@ -937,6 +949,7 @@ class ShotListGUI(QMainWindow):
         self.go_btn.setEnabled(False)
         self.progress.setRange(0, 0)
         self.progress.show()
+        self.last_export_path = output
 
         self.worker = ShotListWorker(
             frame_counter_track=frame_counter_track,
@@ -965,7 +978,16 @@ class ShotListGUI(QMainWindow):
         self.progress.hide()
 
         if success:
-            QMessageBox.information(self, "Success", msg)
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Success")
+            msg_box.setText(msg)
+            msg_box.setIcon(QMessageBox.Information)
+            open_btn = msg_box.addButton("Open File", QMessageBox.ActionRole)
+            msg_box.addButton(QMessageBox.Ok)
+            msg_box.exec()
+            if msg_box.clickedButton() == open_btn:
+                if self.last_export_path and Path(self.last_export_path).exists():
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_export_path))
         else:
             QMessageBox.critical(self, "Error", f"Export failed: {msg}")
 
