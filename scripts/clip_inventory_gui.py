@@ -408,7 +408,7 @@ class ExportWorker(QThread):
             
             # Headers
             headers = ["Thumbnail", "Reel Name", "Cut Order", "Record In",
-                      "Record Out", "Duration", "Source In", "Notes"]
+                      "Record Out", "Duration", "Source In", "Metadata"]
             for idx, header in enumerate(headers, 1):
                 ws.cell(1, idx, header)
 
