@@ -114,16 +114,14 @@ if [ "$USE_ARCH_PREFIX" = true ]; then
         PySide6 \
         "openpyxl>=3.0.0" \
         "Pillow>=8.0.0" \
-        "timecode>=1.4.0" \
-        "moviepy>=1.0.3"
+        "timecode>=1.4.0"
 else
     echo "  Installing packages for native architecture..."
     pip install \
         PySide6 \
         "openpyxl>=3.0.0" \
         "Pillow>=8.0.0" \
-        "timecode>=1.4.0" \
-        "moviepy>=1.0.3"
+        "timecode>=1.4.0"
 fi
 
 if [ $? -ne 0 ]; then

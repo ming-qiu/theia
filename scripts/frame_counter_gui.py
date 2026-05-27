@@ -17,7 +17,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QIcon
 
 from PIL import Image, ImageDraw, ImageFont
-from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
+from fractions import Fraction
 import subprocess
 import tempfile
 
@@ -27,7 +27,7 @@ class FrameCounterWorker(QThread):
     progress = Signal(str)
     finished = Signal(bool, str)
 
-    def __init__(self, width, height, begin, end, fps, output_dir, font_path):
+    def __init__(self, width, height, begin, end, fps, output_dir, font_path, text_color):
         super().__init__()
         self.width = width
         self.height = height
@@ -36,6 +36,7 @@ class FrameCounterWorker(QThread):
         self.fps = fps
         self.output_dir = output_dir
         self.font_path = font_path
+        self.text_color = text_color
 
     def log(self, msg):
         self.progress.emit(msg)
@@ -67,26 +68,21 @@ class FrameCounterWorker(QThread):
                 self.log("Falling back to default font")
                 font = ImageFont.load_default()
 
+            # Zero-pad filenames to enough digits for correct alphabetical sort
+            max_digits = max(4, len(str(end)))
+
             # Generate frame images
             total_frames = end - begin + 1
             self.log(f"Generating {total_frames} frame images...")
             for i, f in enumerate(range(begin, end + 1)):
                 im = Image.new(mode="RGB", size=(w, h))
                 draw = ImageDraw.Draw(im)
-                draw.text((int(0.1 * h), int(0.1 * h)), str(f), font=font, fill=(255, 255, 255))
-                file_name = str(f).zfill(4) + '.png'
+                draw.text((int(0.1 * h), int(0.1 * h)), str(f), font=font, fill=self.text_color)
+                file_name = str(f).zfill(max_digits) + '.png'
                 im.save(os.path.join(temp_frames_dir, file_name))
 
-                # Log progress every 100 frames
                 if (i + 1) % 100 == 0 or i == total_frames - 1:
                     self.log(f"  Frames: {i + 1}/{total_frames}")
-
-            # Generate video from image sequence
-            self.log("Creating video from frames...")
-            clip = ImageSequenceClip(temp_frames_dir, fps=fps)
-
-            temp_video_path = os.path.join(self.output_dir, f"temp_{fps_label}fps.mp4")
-            clip.write_videofile(temp_video_path, fps=float(fps), logger=None)
 
             # Calculate starting timecode
             import timecode as tc_mod
@@ -94,41 +90,71 @@ class FrameCounterWorker(QThread):
             start_timecode = str(tc)
             self.log(f"Setting start timecode to: {start_timecode}")
 
-            # Burn timecode metadata via ffmpeg (MOV container supports timecode tracks)
-            video_path = os.path.join(self.output_dir, f"frame_counter_{fps_label}fps.mov")
-
+            # Step 1: encode image sequence to temp video
+            self.log("Creating video from frames...")
             ffmpeg_bin = shutil.which('ffmpeg') or '/opt/homebrew/bin/ffmpeg'
-            ffmpeg_cmd = [
-                ffmpeg_bin, '-i', temp_video_path,
+            fps_frac = Fraction(fps).limit_denominator(1001)
+
+            temp_video_path = os.path.join(self.output_dir, f"temp_{fps_label}fps.mp4")
+            fps_str = f'{fps_frac.numerator}/{fps_frac.denominator}'
+            img_pattern = os.path.join(temp_frames_dir, f'%0{max_digits}d.png')
+
+            # Try h264_videotoolbox first (macOS built-in, no external lib), fall back to libx264
+            encoded = False
+            for codec in ['h264_videotoolbox', 'libx264']:
+                encode_cmd = [
+                    ffmpeg_bin,
+                    '-loglevel', 'error',
+                    '-framerate', fps_str,
+                    '-start_number', str(begin),
+                    '-i', img_pattern,
+                    '-c:v', codec,
+                    '-pix_fmt', 'yuv420p',
+                    '-y',
+                    temp_video_path
+                ]
+                result = subprocess.run(encode_cmd, capture_output=True)
+                if result.returncode == 0:
+                    encoded = True
+                    break
+                self.log(f"  codec {codec} failed (exit {result.returncode}), trying next...")
+
+            if not encoded:
+                self.log(f"ERROR: all codecs failed. Last stderr: {result.stderr.decode()}")
+                raise RuntimeError("ffmpeg encode failed with all available codecs")
+
+            # Cleanup temp frames now that video is encoded
+            shutil.rmtree(temp_frames_dir, ignore_errors=True)
+
+            # Step 2: add timecode track via stream copy
+            video_path = os.path.join(self.output_dir, f"frame_counter_{fps_label}fps.mov")
+            tc_cmd = [
+                ffmpeg_bin,
+                '-loglevel', 'error',
+                '-i', temp_video_path,
                 '-c', 'copy',
                 '-timecode', start_timecode,
                 '-y',
                 video_path
             ]
-
             try:
-                subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
-                self.log(f"✓ Timecode metadata applied")
+                subprocess.run(tc_cmd, check=True, capture_output=True)
+                self.log("✓ Timecode metadata applied")
                 os.remove(temp_video_path)
             except subprocess.CalledProcessError as e:
                 self.log(f"WARNING: ffmpeg timecode failed: {e.stderr.decode()}")
                 self.log("  Saving video without timecode metadata")
                 os.rename(temp_video_path, video_path)
 
-            # Cleanup temp frames
-            shutil.rmtree(temp_frames_dir, ignore_errors=True)
-
             self.log("=" * 50)
             self.log(f"✓ Done: {video_path}")
             self.finished.emit(True, f"Generated: {video_path}")
 
         except Exception as e:
-            # Best-effort cleanup
             if 'temp_frames_dir' in locals():
                 shutil.rmtree(temp_frames_dir, ignore_errors=True)
             if 'temp_video_path' in locals() and os.path.exists(temp_video_path):
                 os.remove(temp_video_path)
-
             self.log(f"ERROR: {e}")
             import traceback
             self.log(traceback.format_exc())
@@ -181,9 +207,16 @@ class FrameCounterGUI(QMainWindow):
         self.height_spin = QSpinBox()
         self.height_spin.setMinimum(50)
         self.height_spin.setMaximum(2160)
-        self.height_spin.setValue(100)
+        self.height_spin.setValue(80)
         self.height_spin.setSuffix(" px")
         size_layout.addWidget(self.height_spin)
+
+        size_layout.addSpacing(20)
+        size_layout.addWidget(QLabel("Text Color:"))
+        self.color_combo = QComboBox()
+        self.color_combo.addItems(["White", "Green", "Yellow"])
+        self.color_combo.setMaximumWidth(100)
+        size_layout.addWidget(self.color_combo)
 
         size_layout.addStretch()
         size_group.setLayout(size_layout)
@@ -384,6 +417,9 @@ class FrameCounterGUI(QMainWindow):
         self.progress.setRange(0, 0)
         self.progress.show()
 
+        color_map = {"White": (255, 255, 255), "Green": (0, 255, 0), "Yellow": (255, 255, 0)}
+        text_color = color_map[self.color_combo.currentText()]
+
         self.worker = FrameCounterWorker(
             width=self.width_spin.value(),
             height=self.height_spin.value(),
@@ -391,7 +427,8 @@ class FrameCounterGUI(QMainWindow):
             end=end,
             fps=fps,
             output_dir=output_dir,
-            font_path=font_path
+            font_path=font_path,
+            text_color=text_color
         )
         self.worker.progress.connect(self.update_log)
         self.worker.finished.connect(self.generation_done)
