@@ -54,6 +54,7 @@ class MetadataWorker(QThread):
     
     def __init__(self, sheet_path, selected_columns, srt_enabled, srt_output_dir,
                  fcpxml_enabled, fcpxml_output_dir, fps,
+                 rec_in_col_idx, rec_out_col_idx,
                  frame_counter_path=None, first_frame=None,
                  shot_code_col_idx=None):
         super().__init__()
@@ -64,6 +65,8 @@ class MetadataWorker(QThread):
         self.fcpxml_enabled = fcpxml_enabled
         self.fcpxml_output_dir = fcpxml_output_dir
         self.fps = fps
+        self.rec_in_col_idx = rec_in_col_idx
+        self.rec_out_col_idx = rec_out_col_idx
         self.frame_counter_path = frame_counter_path
         self.first_frame = first_frame
         self.shot_code_col_idx = shot_code_col_idx
@@ -83,8 +86,8 @@ class MetadataWorker(QThread):
             content = row[column_index]
             if content and str(content).strip():
                 subtitles.append({
-                    'tc_in': Timecode(self.fps, str(row[3])),    # Column D
-                    'tc_out': Timecode(self.fps, str(row[4])),   # Column E
+                    'tc_in': Timecode(self.fps, str(row[self.rec_in_col_idx])),
+                    'tc_out': Timecode(self.fps, str(row[self.rec_out_col_idx])),
                     'text': str(content).strip()
                 })
         
@@ -126,8 +129,8 @@ class MetadataWorker(QThread):
             content = row[column_index]
             if content and str(content).strip():
                 titles.append({
-                    'tc_in': Timecode(self.fps, str(row[3])),    # Column D
-                    'tc_out': Timecode(self.fps, str(row[4])),   # Column E
+                    'tc_in': Timecode(self.fps, str(row[self.rec_in_col_idx])),
+                    'tc_out': Timecode(self.fps, str(row[self.rec_out_col_idx])),
                     'text': str(content).strip()
                 })
         
@@ -302,8 +305,8 @@ class MetadataWorker(QThread):
                 if not has_metadata:
                     continue
 
-                record_tc_in = Timecode(self.fps, str(row[3]))   # Column D
-                record_tc_out = Timecode(self.fps, str(row[4]))  # Column E
+                record_tc_in = Timecode(self.fps, str(row[self.rec_in_col_idx]))
+                record_tc_out = Timecode(self.fps, str(row[self.rec_out_col_idx]))
 
                 shot_duration = record_tc_out.frames - record_tc_in.frames
 
@@ -424,10 +427,12 @@ class AddMetadataGUI(QMainWindow):
     def setup_ui(self):
         self.setWindowTitle("Theia - Add Metadata")
         self.setMinimumWidth(600)
-        self.setMinimumHeight(1000)
+        self.setMinimumHeight(1200)
         
         self.column_checkboxes = []
         self.available_columns = []  # List of (index, name) tuples
+        self.rec_in_combo = None
+        self.rec_out_combo = None
         
         # Create central widget
         central = QWidget()
@@ -464,7 +469,35 @@ class AddMetadataGUI(QMainWindow):
         layout.addWidget(file_group)
         layout.addSpacing(5)
         
-        # Column selection - independent group
+        # Clip Data Columns
+        clip_data_group = QGroupBox("Clip Data Columns")
+        clip_data_layout = QVBoxLayout()
+
+        rec_in_row = QHBoxLayout()
+        rec_in_row.addWidget(QLabel("Record In:"))
+        self.rec_in_combo = QComboBox()
+        self.rec_in_combo.setMinimumWidth(220)
+        self.rec_in_combo.addItem("(Select column...)", None)
+        self.rec_in_combo.currentIndexChanged.connect(self.update_go_button)
+        rec_in_row.addWidget(self.rec_in_combo)
+        rec_in_row.addStretch()
+        clip_data_layout.addLayout(rec_in_row)
+
+        rec_out_row = QHBoxLayout()
+        rec_out_row.addWidget(QLabel("Record Out:"))
+        self.rec_out_combo = QComboBox()
+        self.rec_out_combo.setMinimumWidth(220)
+        self.rec_out_combo.addItem("(Select column...)", None)
+        self.rec_out_combo.currentIndexChanged.connect(self.update_go_button)
+        rec_out_row.addWidget(self.rec_out_combo)
+        rec_out_row.addStretch()
+        clip_data_layout.addLayout(rec_out_row)
+
+        clip_data_group.setLayout(clip_data_layout)
+        layout.addWidget(clip_data_group)
+        layout.addSpacing(5)
+
+        # Metadata Columns
         col_group = QGroupBox("Metadata Columns")
         col_layout = QVBoxLayout()
         
@@ -506,63 +539,13 @@ class AddMetadataGUI(QMainWindow):
         layout.addWidget(col_group)
         layout.addSpacing(5)
         
-        # FCPXML export
-        fcpxml_group = QGroupBox("FCPXML Titles")
-        fcpxml_layout = QVBoxLayout()
-        
-        self.fcpxml_enable = QCheckBox("Export FCPXML title files")
-        self.fcpxml_enable.setChecked(True)
-        self.fcpxml_enable.toggled.connect(self.toggle_fcpxml)
-        fcpxml_layout.addWidget(self.fcpxml_enable)
-        
-        fcpxml_output_row = QHBoxLayout()
-        fcpxml_output_row.addWidget(QLabel("Output Directory:"))
-        self.fcpxml_output_dir_input = QLineEdit(str(Path.home() / "Downloads/"))
-        self.fcpxml_output_dir_input.setPlaceholderText("Directory for FCPXML files")
-        fcpxml_output_row.addWidget(self.fcpxml_output_dir_input)
-        
-        browse_fcpxml_output_btn = QPushButton("Browse...")
-        browse_fcpxml_output_btn.setMaximumWidth(100)
-        browse_fcpxml_output_btn.clicked.connect(self.browse_fcpxml_output_dir)
-        self.browse_fcpxml_output_btn = browse_fcpxml_output_btn
-        fcpxml_output_row.addWidget(browse_fcpxml_output_btn)
-        
-        fcpxml_layout.addLayout(fcpxml_output_row)
-        fcpxml_group.setLayout(fcpxml_layout)
-        layout.addWidget(fcpxml_group)
-        layout.addSpacing(5)
-        
-        # SRT export
-        srt_group = QGroupBox("SRT Subtitles")
-        srt_layout = QVBoxLayout()
-        
-        self.srt_enable = QCheckBox("Export SRT subtitle files")
-        self.srt_enable.setChecked(True)
-        self.srt_enable.toggled.connect(self.toggle_srt)
-        srt_layout.addWidget(self.srt_enable)
-        
-        srt_output_row = QHBoxLayout()
-        srt_output_row.addWidget(QLabel("Output Directory:"))
-        self.srt_output_dir_input = QLineEdit(str(Path.home() / "Downloads/"))
-        self.srt_output_dir_input.setPlaceholderText("Directory for SRT files")
-        srt_output_row.addWidget(self.srt_output_dir_input)
-        
-        browse_srt_output_btn = QPushButton("Browse...")
-        browse_srt_output_btn.setMaximumWidth(100)
-        browse_srt_output_btn.clicked.connect(self.browse_srt_output_dir)
-        self.browse_srt_output_btn = browse_srt_output_btn
-        srt_output_row.addWidget(browse_srt_output_btn)
-        
-        srt_layout.addLayout(srt_output_row)
-        srt_group.setLayout(srt_layout)
-        layout.addWidget(srt_group)
-        layout.addSpacing(5)
         
         # Frame Counter
         fc_group = QGroupBox("Frame Counter")
         fc_layout = QVBoxLayout()
         
         self.fc_enable = QCheckBox("Add frame counter videos to timeline")
+        self.fc_enable.setChecked(True)
         self.fc_enable.toggled.connect(self.toggle_frame_counter)
         fc_layout.addWidget(self.fc_enable)
         
@@ -570,13 +553,11 @@ class AddMetadataGUI(QMainWindow):
         fc_file_row.addWidget(QLabel("Frame Counter File:"))
         self.fc_file_input = QLineEdit("")
         self.fc_file_input.setPlaceholderText("Path to frame counter video file")
-        self.fc_file_input.setEnabled(False)
         fc_file_row.addWidget(self.fc_file_input)
         
         browse_fc_btn = QPushButton("Browse...")
         browse_fc_btn.setMaximumWidth(100)
         browse_fc_btn.clicked.connect(self.browse_frame_counter)
-        browse_fc_btn.setEnabled(False)
         self.browse_fc_btn = browse_fc_btn
         fc_file_row.addWidget(browse_fc_btn)
         
@@ -588,7 +569,6 @@ class AddMetadataGUI(QMainWindow):
         self.first_frame.setMinimum(0)
         self.first_frame.setMaximum(999999)
         self.first_frame.setValue(1001)
-        self.first_frame.setEnabled(False)
         first_frame_row.addWidget(self.first_frame)
         first_frame_row.addStretch()
 
@@ -597,7 +577,6 @@ class AddMetadataGUI(QMainWindow):
         shot_code_row = QHBoxLayout()
         shot_code_row.addWidget(QLabel("VFX Shot Code Column:"))
         self.shot_code_combo = QComboBox()
-        self.shot_code_combo.setEnabled(False)
         self.shot_code_combo.addItem("(None)", None)
         shot_code_row.addWidget(self.shot_code_combo)
         shot_code_row.addStretch()
@@ -605,6 +584,61 @@ class AddMetadataGUI(QMainWindow):
         fc_layout.addLayout(shot_code_row)
         fc_group.setLayout(fc_layout)
         layout.addWidget(fc_group)
+        layout.addSpacing(5)
+
+
+        # FCPXML export
+        fcpxml_group = QGroupBox("FCPXML Titles")
+        fcpxml_layout = QVBoxLayout()
+        
+        self.fcpxml_enable = QCheckBox("Export metadata to FCPXML title files")
+        self.fcpxml_enable.toggled.connect(self.toggle_fcpxml)
+        fcpxml_layout.addWidget(self.fcpxml_enable)
+        
+        fcpxml_output_row = QHBoxLayout()
+        fcpxml_output_row.addWidget(QLabel("Output Directory:"))
+        self.fcpxml_output_dir_input = QLineEdit(str(Path.home() / "Downloads/"))
+        self.fcpxml_output_dir_input.setEnabled(False)
+        self.fcpxml_output_dir_input.setPlaceholderText("Directory for FCPXML files")
+        fcpxml_output_row.addWidget(self.fcpxml_output_dir_input)
+        
+        browse_fcpxml_output_btn = QPushButton("Browse...")
+        browse_fcpxml_output_btn.setMaximumWidth(100)
+        browse_fcpxml_output_btn.clicked.connect(self.browse_fcpxml_output_dir)
+        self.browse_fcpxml_output_btn = browse_fcpxml_output_btn
+        self.browse_fcpxml_output_btn.setEnabled(False)
+        fcpxml_output_row.addWidget(browse_fcpxml_output_btn)
+        
+        fcpxml_layout.addLayout(fcpxml_output_row)
+        fcpxml_group.setLayout(fcpxml_layout)
+        layout.addWidget(fcpxml_group)
+        layout.addSpacing(5)
+        
+        # SRT export
+        srt_group = QGroupBox("SRT Subtitles")
+        srt_layout = QVBoxLayout()
+        
+        self.srt_enable = QCheckBox("Export metadata to SRT subtitle files")
+        self.srt_enable.toggled.connect(self.toggle_srt)
+        srt_layout.addWidget(self.srt_enable)
+        
+        srt_output_row = QHBoxLayout()
+        srt_output_row.addWidget(QLabel("Output Directory:"))
+        self.srt_output_dir_input = QLineEdit(str(Path.home() / "Downloads/"))
+        self.srt_output_dir_input.setEnabled(False)
+        self.srt_output_dir_input.setPlaceholderText("Directory for SRT files")
+        srt_output_row.addWidget(self.srt_output_dir_input)
+        
+        browse_srt_output_btn = QPushButton("Browse...")
+        browse_srt_output_btn.setMaximumWidth(100)
+        browse_srt_output_btn.clicked.connect(self.browse_srt_output_dir)
+        self.browse_srt_output_btn = browse_srt_output_btn
+        self.browse_srt_output_btn.setEnabled(False)
+        srt_output_row.addWidget(browse_srt_output_btn)
+        
+        srt_layout.addLayout(srt_output_row)
+        srt_group.setLayout(srt_layout)
+        layout.addWidget(srt_group)
         layout.addSpacing(5)
         
         # Frame Rate Settings
@@ -672,9 +706,10 @@ class AddMetadataGUI(QMainWindow):
         layout.addWidget(fps_group)
         layout.addSpacing(5)
         
-        # Go button
+        # Go button — disabled until Record In/Out columns are confirmed
         self.process_btn = QPushButton("Go")
         self.process_btn.setMinimumHeight(40)
+        self.process_btn.setEnabled(False)
         self.process_btn.clicked.connect(self.start_processing)
         layout.addWidget(self.process_btn)
         
@@ -730,6 +765,11 @@ class AddMetadataGUI(QMainWindow):
         else:
             return float(self.fps_combo.currentText())
     
+    def update_go_button(self):
+        rec_in_ok = self.rec_in_combo.currentData() is not None
+        rec_out_ok = self.rec_out_combo.currentData() is not None
+        self.process_btn.setEnabled(rec_in_ok and rec_out_ok)
+
     def on_excel_file_changed(self):
         """Handle Excel file path changes."""
         # Auto-load columns when a valid file is entered
@@ -737,12 +777,20 @@ class AddMetadataGUI(QMainWindow):
             self.load_excel_columns()
     
     def load_excel_columns(self):
-        """Load column headers from Excel file starting from column G."""
+        """Load column headers from the Excel file."""
         # Clear existing checkboxes
         for cb in self.column_checkboxes:
             cb.deleteLater()
         self.column_checkboxes.clear()
         self.available_columns.clear()
+
+        # Reset clip data combos
+        self.rec_in_combo.blockSignals(True)
+        self.rec_out_combo.blockSignals(True)
+        self.rec_in_combo.clear()
+        self.rec_out_combo.clear()
+        self.rec_in_combo.addItem("(Select column...)", None)
+        self.rec_out_combo.addItem("(Select column...)", None)
 
         # Clear and repopulate shot code combo
         self.shot_code_combo.clear()
@@ -751,17 +799,41 @@ class AddMetadataGUI(QMainWindow):
         sheet_path = self.sheet_input.text()
         if not sheet_path or not os.path.exists(sheet_path):
             self.add_column_checkbox(6, "G", "(No file loaded)", enabled=False)
+            self.rec_in_combo.blockSignals(False)
+            self.rec_out_combo.blockSignals(False)
+            self.update_go_button()
             return
 
         try:
             wb = load_workbook(sheet_path, read_only=True)
             ws = wb.active
-
-            # Read headers from first row, starting at column H (index 7, 0-indexed)
             headers = list(ws.iter_rows(min_row=1, max_row=1, values_only=True))[0]
+            wb.close()
 
+            # Populate Record In / Record Out combos with all columns that have a header
+            auto_rec_in = None
+            auto_rec_out = None
+            for col_idx, header in enumerate(headers):
+                if not header or not str(header).strip():
+                    continue
+                col_letter = get_column_letter(col_idx + 1)
+                col_name = str(header).strip()
+                label = f"[{col_letter}] {col_name}"
+                self.rec_in_combo.addItem(label, col_idx)
+                self.rec_out_combo.addItem(label, col_idx)
+                if col_name.lower() == "record in":
+                    auto_rec_in = self.rec_in_combo.count() - 1
+                if col_name.lower() == "record out":
+                    auto_rec_out = self.rec_out_combo.count() - 1
+
+            if auto_rec_in is not None:
+                self.rec_in_combo.setCurrentIndex(auto_rec_in)
+            if auto_rec_out is not None:
+                self.rec_out_combo.setCurrentIndex(auto_rec_out)
+
+            # Populate metadata column checkboxes (H onwards, index 7+)
             found_columns = False
-            for col_idx in range(7, len(headers)):  # Start from column H (index 7)
+            for col_idx in range(7, len(headers)):
                 header = headers[col_idx]
                 if header and str(header).strip():
                     col_letter = get_column_letter(col_idx + 1)
@@ -770,8 +842,6 @@ class AddMetadataGUI(QMainWindow):
                     self.add_column_checkbox(col_idx, col_letter, col_name, checked=True)
                     self.shot_code_combo.addItem(f"[{col_letter}] {col_name}", col_idx)
                     found_columns = True
-
-            wb.close()
 
             if not found_columns:
                 self.add_column_checkbox(7, "H", "(No metadata columns found)", enabled=False)
@@ -782,6 +852,10 @@ class AddMetadataGUI(QMainWindow):
         except Exception as e:
             self.add_column_checkbox(6, "G", f"(Error: {str(e)})", enabled=False)
             self.log.append(f"Could not load columns: {e}")
+
+        self.rec_in_combo.blockSignals(False)
+        self.rec_out_combo.blockSignals(False)
+        self.update_go_button()
     
     def add_column_checkbox(self, col_idx, col_letter, col_name, checked=False, enabled=True):
         """Add a checkbox for a column."""
@@ -954,12 +1028,15 @@ class AddMetadataGUI(QMainWindow):
         if fps is None:
             QMessageBox.warning(self, "Error", "Please enter a valid FPS value (must be positive)")
             return
-        
+
+        rec_in_col_idx = self.rec_in_combo.currentData()
+        rec_out_col_idx = self.rec_out_combo.currentData()
+
         self.log.clear()
         self.process_btn.setEnabled(False)
         self.progress.setRange(0, 0)
         self.progress.show()
-        
+
         # Get shot code column index if frame counter is enabled
         shot_code_col_idx = None
         if fc_enabled:
@@ -968,6 +1045,7 @@ class AddMetadataGUI(QMainWindow):
         self.worker = MetadataWorker(
             sheet_path, selected_columns, srt_enabled, srt_output_dir,
             fcpxml_enabled, fcpxml_output_dir, fps,
+            rec_in_col_idx, rec_out_col_idx,
             frame_counter_path, first_frame,
             shot_code_col_idx=shot_code_col_idx
         )
@@ -984,8 +1062,8 @@ class AddMetadataGUI(QMainWindow):
     
     def processing_done(self, success, msg):
         """Handle processing completion."""
-        self.process_btn.setEnabled(True)
         self.progress.hide()
+        self.update_go_button()
         
         if success:
             QMessageBox.information(self, "Success", msg)
