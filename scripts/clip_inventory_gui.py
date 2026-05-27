@@ -19,6 +19,7 @@ from PySide6.QtGui import QFont, QDesktopServices, QIcon
 
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.styles import Font
 from PIL import Image as PILImage
 
 # Import DaVinci Resolve API
@@ -410,7 +411,9 @@ class ExportWorker(QThread):
             headers = ["Thumbnail", "Reel Name", "Cut Order", "Record In",
                       "Record Out", "Duration", "Source In", "Metadata"]
             for idx, header in enumerate(headers, 1):
-                ws.cell(1, idx, header)
+                cell = ws.cell(1, idx, header)
+                if header in ("Record In", "Record Out"):
+                    cell.font = Font(bold=True)
 
             # Column widths
             ws.column_dimensions['A'].width = 34
