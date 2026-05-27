@@ -294,16 +294,17 @@ class MetadataWorker(QThread):
                 if len(row) < 5:
                     continue
 
-                # Check if any metadata exists in column H onwards (index 7+)
-                has_metadata = False
-                for cell_value in row[7:]:  # Column H is index 7
-                    if cell_value and str(cell_value).strip():
-                        has_metadata = True
-                        break
-
-                # Skip this shot if no metadata
-                if not has_metadata:
-                    continue
+                # Skip shots without a VFX shot code (non-VFX shots don't need frame counters)
+                if self.shot_code_col_idx is not None:
+                    if len(row) <= self.shot_code_col_idx:
+                        continue
+                    shot_code_val = row[self.shot_code_col_idx]
+                    if not shot_code_val or not str(shot_code_val).strip():
+                        continue
+                else:
+                    # No shot code column configured — fall back to any metadata in H+
+                    if not any(c and str(c).strip() for c in row[7:]):
+                        continue
 
                 record_tc_in = Timecode(self.fps, str(row[self.rec_in_col_idx]))
                 record_tc_out = Timecode(self.fps, str(row[self.rec_out_col_idx]))
@@ -318,12 +319,11 @@ class MetadataWorker(QThread):
                     "recordFrame": record_tc_in.frames - 1
                 })
 
-                # Collect shot code for renaming
-                shot_code = ""
-                if self.shot_code_col_idx is not None and len(row) > self.shot_code_col_idx:
-                    val = row[self.shot_code_col_idx]
-                    if val and str(val).strip():
-                        shot_code = str(val).strip()
+                # Collect shot code for clip renaming
+                if self.shot_code_col_idx is not None:
+                    shot_code = str(shot_code_val).strip()
+                else:
+                    shot_code = ""
                 shot_codes.append(shot_code)
 
             self.log(f"Adding {len(clips_to_add)} frame counter clips...")
@@ -496,48 +496,6 @@ class AddMetadataGUI(QMainWindow):
         clip_data_group.setLayout(clip_data_layout)
         layout.addWidget(clip_data_group)
         layout.addSpacing(5)
-
-        # Metadata Columns
-        col_group = QGroupBox("Metadata Columns")
-        col_layout = QVBoxLayout()
-        
-        col_header = QHBoxLayout()
-        col_header.addWidget(QLabel("Select Columns to Export:"))
-        
-        select_all_btn = QPushButton("Select All")
-        select_all_btn.setMaximumWidth(80)
-        select_all_btn.clicked.connect(self.select_all_columns)
-        col_header.addWidget(select_all_btn)
-        
-        deselect_all_btn = QPushButton("Deselect All")
-        deselect_all_btn.setMaximumWidth(100)
-        deselect_all_btn.clicked.connect(self.deselect_all_columns)
-        col_header.addWidget(deselect_all_btn)
-        
-        refresh_btn = QPushButton("↻")
-        refresh_btn.setMaximumWidth(40)
-        refresh_btn.setToolTip("Refresh Column List")
-        refresh_btn.clicked.connect(self.load_excel_columns)
-        col_header.addWidget(refresh_btn)
-        
-        col_header.addStretch()
-        col_layout.addLayout(col_header)
-        
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(150)
-        scroll.setMinimumHeight(80)
-        
-        self.column_checkbox_widget = QWidget()
-        self.column_checkbox_layout = QVBoxLayout(self.column_checkbox_widget)
-        self.column_checkbox_layout.setContentsMargins(5, 5, 5, 5)
-        
-        scroll.setWidget(self.column_checkbox_widget)
-        col_layout.addWidget(scroll)
-        
-        col_group.setLayout(col_layout)
-        layout.addWidget(col_group)
-        layout.addSpacing(5)
         
         
         # Frame Counter
@@ -584,6 +542,49 @@ class AddMetadataGUI(QMainWindow):
         fc_layout.addLayout(shot_code_row)
         fc_group.setLayout(fc_layout)
         layout.addWidget(fc_group)
+        layout.addSpacing(5)
+
+
+        # Metadata Columns
+        col_group = QGroupBox("Metadata Columns")
+        col_layout = QVBoxLayout()
+        
+        col_header = QHBoxLayout()
+        col_header.addWidget(QLabel("Select Columns to Export:"))
+        
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.setMaximumWidth(80)
+        select_all_btn.clicked.connect(self.select_all_columns)
+        col_header.addWidget(select_all_btn)
+        
+        deselect_all_btn = QPushButton("Deselect All")
+        deselect_all_btn.setMaximumWidth(100)
+        deselect_all_btn.clicked.connect(self.deselect_all_columns)
+        col_header.addWidget(deselect_all_btn)
+        
+        refresh_btn = QPushButton("↻")
+        refresh_btn.setMaximumWidth(40)
+        refresh_btn.setToolTip("Refresh Column List")
+        refresh_btn.clicked.connect(self.load_excel_columns)
+        col_header.addWidget(refresh_btn)
+        
+        col_header.addStretch()
+        col_layout.addLayout(col_header)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(150)
+        scroll.setMinimumHeight(80)
+        
+        self.column_checkbox_widget = QWidget()
+        self.column_checkbox_layout = QVBoxLayout(self.column_checkbox_widget)
+        self.column_checkbox_layout.setContentsMargins(5, 5, 5, 5)
+        
+        scroll.setWidget(self.column_checkbox_widget)
+        col_layout.addWidget(scroll)
+        
+        col_group.setLayout(col_layout)
+        layout.addWidget(col_group)
         layout.addSpacing(5)
 
 
@@ -833,13 +834,13 @@ class AddMetadataGUI(QMainWindow):
 
             # Populate metadata column checkboxes (H onwards, index 7+)
             found_columns = False
-            for col_idx in range(7, len(headers)):
+            for col_idx in range(1, len(headers)):
                 header = headers[col_idx]
                 if header and str(header).strip():
                     col_letter = get_column_letter(col_idx + 1)
                     col_name = str(header).strip()
                     self.available_columns.append((col_idx, col_name))
-                    self.add_column_checkbox(col_idx, col_letter, col_name, checked=True)
+                    self.add_column_checkbox(col_idx, col_letter, col_name, checked=False)
                     self.shot_code_combo.addItem(f"[{col_letter}] {col_name}", col_idx)
                     found_columns = True
 
