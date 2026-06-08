@@ -12,7 +12,7 @@ from timecode import Timecode
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog,
-    QMessageBox, QProgressBar, QTextEdit, QCheckBox, QScrollArea
+    QMessageBox, QProgressBar, QTextEdit, QCheckBox, QScrollArea, QComboBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QUrl
 from PySide6.QtGui import QFont, QDesktopServices, QIcon
@@ -74,10 +74,12 @@ class ExportWorker(QThread):
     progress = Signal(str)
     finished = Signal(bool, str, int)
     
-    def __init__(self, output_path, selected_tracks):
+    def __init__(self, output_path, selected_tracks, subtitle_track_num=None, vfx_only=False):
         super().__init__()
         self.output_path = output_path
         self.selected_tracks = selected_tracks  # List of track numbers
+        self.subtitle_track_num = subtitle_track_num  # Subtitle track for VFX shot codes, or None
+        self.vfx_only = vfx_only  # If True, only export rows with a VFX shot code
     
     def log(self, msg):
         self.progress.emit(msg)
@@ -358,6 +360,18 @@ class ExportWorker(QThread):
             fps = float(timeline.GetSetting("timelineFrameRate"))
             self.log(f"Timeline: {timeline_name} ({fps} fps)")
             
+            # Load subtitle clips for VFX shot code lookup if requested
+            subtitle_clips = []
+            if self.subtitle_track_num is not None:
+                self.log(f"Reading VFX shot codes from subtitle track {self.subtitle_track_num}...")
+                try:
+                    items = timeline.GetItemListInTrack("subtitle", self.subtitle_track_num) or []
+                    for item in items:
+                        subtitle_clips.append((item.GetStart(), item.GetEnd(), item.GetName() or ""))
+                    self.log(f"Found {len(subtitle_clips)} subtitle clip(s)")
+                except Exception as e:
+                    self.log(f"  Warning: could not read subtitle track: {e}")
+
             # Get visible clips using occlusion logic
             track_str = ", ".join(str(t) for t in sorted(self.selected_tracks))
             self.log(f"Analyzing tracks: {track_str}")
@@ -409,7 +423,10 @@ class ExportWorker(QThread):
             
             # Headers
             headers = ["Thumbnail", "Reel Name", "Cut Order", "Record In",
-                      "Record Out", "Duration", "Source In", "Metadata"]
+                      "Record Out", "Duration", "Source In"]
+            if subtitle_clips or self.subtitle_track_num is not None:
+                headers.append("VFX Shot Code")
+            headers.append("Metadata")
             for idx, header in enumerate(headers, 1):
                 cell = ws.cell(1, idx, header)
                 if header in ("Record In", "Record Out"):
@@ -418,8 +435,12 @@ class ExportWorker(QThread):
             # Column widths
             ws.column_dimensions['A'].width = 34
             ws.column_dimensions['B'].width = 25
-            for col in ['C', 'D', 'E', 'F', 'G', 'H']:
+            for col in ['C', 'D', 'E', 'F', 'G']:
                 ws.column_dimensions[col].width = 15
+            col_h_letter = chr(ord('H'))
+            ws.column_dimensions[col_h_letter].width = 20
+            if len(headers) >= 9:
+                ws.column_dimensions['I'].width = 15
             
             # Process clips - one row per visible range
             row_num = 2  # Start after header
@@ -441,6 +462,7 @@ class ExportWorker(QThread):
             
             # Reset indices for actual processing
             clip_range_indices = {}
+            processed_clip_count = 0
             
             for cut_order, range_info in enumerate(all_visible_ranges, 1):
                 clip = range_info['clip']
@@ -457,22 +479,41 @@ class ExportWorker(QThread):
                 clip_range_indices[clip_id] += 1
                 
                 self.log(f"[{cut_order}] Track {track_num}: {clip.GetName()} [{vis_start}-{vis_end}]")
-                
+
+                # VFX Shot Code
+                shot_code = None
+                if self.subtitle_track_num is not None:
+                    mid = (vis_start + vis_end) / 2
+                    shot_code = ""
+                    for sub_start, sub_end, text in subtitle_clips:
+                        if sub_start <= mid < sub_end:
+                            shot_code = text
+                            break
+                    if not shot_code:
+                        for sub_start, sub_end, text in subtitle_clips:
+                            if sub_start < vis_end and sub_end > vis_start:
+                                shot_code = text
+                                break
+
+                    if self.vfx_only and not shot_code:
+                        self.log(f"    Skipping (no VFX shot code)")
+                        continue
+
                 # Reel Name
                 clip_name = clip.GetName()
                 if clip_range_counts[clip_id] > 1:
                     clip_name = f"{clip_name} (part {clip_range_indices[clip_id]})"
                 ws.cell(row_num, 2, clip_name)
-                
+
                 # Cut Order
                 ws.cell(row_num, 3, cut_order)
-                
+
                 # Timecodes - use visible range
                 tc_in = Timecode(fps, frames=int(vis_start + 1))
                 tc_out = Timecode(fps, frames=int(vis_end + 1))
                 ws.cell(row_num, 4, str(tc_in))
                 ws.cell(row_num, 5, str(tc_out))
-                
+
                 # Duration (Record Out - Record In + 1)
                 ws.cell(row_num, 6, int(vis_end - vis_start))
 
@@ -494,7 +535,13 @@ class ExportWorker(QThread):
                         ws.cell(row_num, 7, str(tc_in))
                 else:
                     ws.cell(row_num, 7, str(tc_in))
-                
+
+                if shot_code is not None:
+                    ws.cell(row_num, 8, shot_code)
+                    metadata_col = 9
+                else:
+                    metadata_col = 8
+
                 # Thumbnail - grab past the transition so Color UI lands on the right clip
                 if media_item:
                     thumb_frame = raw_start + range_info['start_adj']
@@ -509,8 +556,9 @@ class ExportWorker(QThread):
                         ws.cell(row_num, 1, "No thumbnail")
                 else:
                     ws.cell(row_num, 1, "No thumbnail")
-                
+
                 row_num += 1
+                processed_clip_count += 1
             
             # Save
             self.log(f"\nSaving to {self.output_path}...")
@@ -529,7 +577,7 @@ class ExportWorker(QThread):
             timeline.SetCurrentTimecode(starting_timecode)
             resolve.OpenPage(starting_page)
             
-            self.finished.emit(True, f"Successfully exported {len(all_visible_ranges)} clips", len(all_visible_ranges))
+            self.finished.emit(True, f"Successfully exported {processed_clip_count} clips", processed_clip_count)
             
         except Exception as e:
             self.log(f"\nERROR: {e}")
@@ -561,6 +609,7 @@ class ClipInventoryGUI(QMainWindow):
         self.worker = None
         self.last_export_path = None
         self.track_checkboxes = []
+        self.subtitle_checkboxes = []
         self.setup_ui()
         self.populate_track_list()
     
@@ -627,7 +676,44 @@ class ClipInventoryGUI(QMainWindow):
         track_layout.addWidget(scroll)
         
         layout.addWidget(track_section)
-        
+
+        # Existing VFX Shot Code section
+        vfx_section = QWidget()
+        vfx_outer_layout = QVBoxLayout(vfx_section)
+        vfx_outer_layout.setContentsMargins(0, 0, 0, 0)
+        vfx_outer_layout.setSpacing(4)
+
+        vfx_header_row = QHBoxLayout()
+        self.vfx_enable = QCheckBox("Existing VFX Shot Code:")
+        self.vfx_enable.toggled.connect(self.toggle_vfx_shot_code)
+        vfx_header_row.addWidget(self.vfx_enable)
+
+        self.vfx_source_combo = QComboBox()
+        self.vfx_source_combo.addItem("Subtitle Track")
+        #self.vfx_source_combo.addItem("Duration Marker")
+        self.vfx_source_combo.setEnabled(False)
+        vfx_header_row.addWidget(self.vfx_source_combo)
+        vfx_header_row.addStretch()
+        vfx_outer_layout.addLayout(vfx_header_row)
+
+        self.subtitle_scroll = QScrollArea()
+        self.subtitle_scroll.setWidgetResizable(True)
+        self.subtitle_scroll.setMaximumHeight(100)
+        self.subtitle_scroll.setMinimumHeight(40)
+        self.subtitle_scroll.setEnabled(False)
+
+        self.subtitle_checkbox_widget = QWidget()
+        self.subtitle_checkbox_layout = QVBoxLayout(self.subtitle_checkbox_widget)
+        self.subtitle_checkbox_layout.setContentsMargins(5, 5, 5, 5)
+        self.subtitle_scroll.setWidget(self.subtitle_checkbox_widget)
+        vfx_outer_layout.addWidget(self.subtitle_scroll)
+
+        self.vfx_only_checkbox = QCheckBox("Export VFX shots only")
+        self.vfx_only_checkbox.setEnabled(False)
+        vfx_outer_layout.addWidget(self.vfx_only_checkbox)
+
+        layout.addWidget(vfx_section)
+
         # Output file
         file_row = QHBoxLayout()
         file_row.addWidget(QLabel("Output File:"))
@@ -639,7 +725,7 @@ class ClipInventoryGUI(QMainWindow):
         layout.addLayout(file_row)
         
         # Export button
-        self.export_btn = QPushButton("Export")
+        self.export_btn = QPushButton("Go")
         self.export_btn.setMinimumHeight(40)
         self.export_btn.clicked.connect(self.start_export)
         layout.addWidget(self.export_btn)
@@ -691,9 +777,10 @@ class ClipInventoryGUI(QMainWindow):
             # Create checkboxes for each track (highest on top, like Resolve)
             for i in range(track_count, 0, -1):
                 self.add_track_checkbox(i, checked=True)
-            
+
             self.log.append(f"✓ Found {track_count} video track(s)")
-            
+            self.populate_subtitle_tracks(timeline)
+
         except Exception as e:
             self.add_track_checkbox(1, checked=True)
             self.log.append(f"⚠️  Could not get tracks: {e}")
@@ -715,7 +802,55 @@ class ClipInventoryGUI(QMainWindow):
         """Uncheck all track checkboxes."""
         for cb in self.track_checkboxes:
             cb.setChecked(False)
-    
+
+    def toggle_vfx_shot_code(self, enabled):
+        """Enable/disable the VFX shot code source controls."""
+        self.vfx_source_combo.setEnabled(enabled)
+        self.subtitle_scroll.setEnabled(enabled)
+        self.vfx_only_checkbox.setEnabled(enabled)
+
+    def populate_subtitle_tracks(self, timeline):
+        """Populate subtitle track checkboxes from the current timeline."""
+        for cb in self.subtitle_checkboxes:
+            cb.deleteLater()
+        self.subtitle_checkboxes.clear()
+
+        try:
+            track_count = timeline.GetTrackCount("subtitle")
+            if track_count == 0:
+                placeholder = QLabel("(No subtitle tracks found)")
+                self.subtitle_checkbox_layout.addWidget(placeholder)
+                return
+            for i in range(track_count, 0, -1):
+                try:
+                    name = timeline.GetTrackName("subtitle", i) or ""
+                except Exception:
+                    name = ""
+                label = f"Track {i}" + (f": {name}" if name else "")
+                cb = QCheckBox(label)
+                cb.setProperty("track_num", i)
+                cb.toggled.connect(lambda checked, num=i: self.on_subtitle_track_toggled(checked, num))
+                self.subtitle_checkbox_layout.addWidget(cb)
+                self.subtitle_checkboxes.append(cb)
+        except Exception as e:
+            self.log.append(f"⚠️  Could not get subtitle tracks: {e}")
+
+    def on_subtitle_track_toggled(self, checked, track_num):
+        """Enforce single selection among subtitle track checkboxes."""
+        if checked:
+            for cb in self.subtitle_checkboxes:
+                if cb.property("track_num") != track_num and cb.isChecked():
+                    cb.blockSignals(True)
+                    cb.setChecked(False)
+                    cb.blockSignals(False)
+
+    def get_selected_subtitle_track(self):
+        """Return the selected subtitle track number, or None."""
+        for cb in self.subtitle_checkboxes:
+            if cb.isChecked():
+                return cb.property("track_num")
+        return None
+
     def get_selected_tracks(self):
         """Get list of selected track numbers."""
         selected = []
@@ -745,16 +880,25 @@ class ClipInventoryGUI(QMainWindow):
         if not selected_tracks:
             QMessageBox.warning(self, "Error", "Please select at least one track")
             return
-        
+
+        # Get subtitle track for VFX shot codes if enabled
+        subtitle_track_num = None
+        if self.vfx_enable.isChecked() and self.vfx_source_combo.currentText() == "Subtitle Track":
+            subtitle_track_num = self.get_selected_subtitle_track()
+            if subtitle_track_num is None:
+                QMessageBox.warning(self, "Error", "Please select a subtitle track for VFX shot codes")
+                return
+
         self.log.clear()
         self.export_btn.setEnabled(False)
         self.progress.setRange(0, 0)
         self.progress.show()
-        
+
         # Store path for later
         self.last_export_path = output
-        
-        self.worker = ExportWorker(output, selected_tracks)
+
+        vfx_only = self.vfx_enable.isChecked() and self.vfx_only_checkbox.isChecked()
+        self.worker = ExportWorker(output, selected_tracks, subtitle_track_num, vfx_only)
         self.worker.progress.connect(self.update_log)
         self.worker.finished.connect(self.export_done)
         self.worker.start()
