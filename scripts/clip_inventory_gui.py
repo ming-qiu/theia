@@ -74,11 +74,13 @@ class ExportWorker(QThread):
     progress = Signal(str)
     finished = Signal(bool, str, int)
     
-    def __init__(self, output_path, selected_tracks, subtitle_track_num=None, vfx_only=False):
+    def __init__(self, output_path, selected_tracks, subtitle_track_num=None,
+                 use_duration_markers=False, vfx_only=False):
         super().__init__()
         self.output_path = output_path
         self.selected_tracks = selected_tracks  # List of track numbers
         self.subtitle_track_num = subtitle_track_num  # Subtitle track for VFX shot codes, or None
+        self.use_duration_markers = use_duration_markers  # Use timeline duration markers instead
         self.vfx_only = vfx_only  # If True, only export rows with a VFX shot code
     
     def log(self, msg):
@@ -360,8 +362,10 @@ class ExportWorker(QThread):
             fps = float(timeline.GetSetting("timelineFrameRate"))
             self.log(f"Timeline: {timeline_name} ({fps} fps)")
             
-            # Load subtitle clips for VFX shot code lookup if requested
-            subtitle_clips = []
+            # Load VFX shot code source (subtitle track or duration markers)
+            subtitle_clips = []  # List of (start_frame, end_frame, shot_code_text)
+            vfx_source_active = self.subtitle_track_num is not None or self.use_duration_markers
+
             if self.subtitle_track_num is not None:
                 self.log(f"Reading VFX shot codes from subtitle track {self.subtitle_track_num}...")
                 try:
@@ -371,6 +375,22 @@ class ExportWorker(QThread):
                     self.log(f"Found {len(subtitle_clips)} subtitle clip(s)")
                 except Exception as e:
                     self.log(f"  Warning: could not read subtitle track: {e}")
+
+            elif self.use_duration_markers:
+                self.log("Reading VFX shot codes from duration markers...")
+                try:
+                    timeline_start = timeline.GetStartFrame()
+                    markers = timeline.GetMarkers() or {}
+                    for offset, data in markers.items():
+                        if data.get('duration', 0) > 1:
+                            abs_start = timeline_start + int(offset)
+                            abs_end = abs_start + int(data['duration'])
+                            name = (data.get('name') or "").strip()
+                            subtitle_clips.append((abs_start, abs_end, name))
+                    subtitle_clips.sort(key=lambda x: x[0])
+                    self.log(f"Found {len(subtitle_clips)} duration marker(s)")
+                except Exception as e:
+                    self.log(f"  Warning: could not read duration markers: {e}")
 
             # Get visible clips using occlusion logic
             track_str = ", ".join(str(t) for t in sorted(self.selected_tracks))
@@ -424,7 +444,7 @@ class ExportWorker(QThread):
             # Headers
             headers = ["Thumbnail", "Reel Name", "Cut Order", "Record In",
                       "Record Out", "Duration", "Source In"]
-            if subtitle_clips or self.subtitle_track_num is not None:
+            if vfx_source_active:
                 headers.append("VFX Shot Code")
             headers.append("Metadata")
             for idx, header in enumerate(headers, 1):
@@ -480,9 +500,9 @@ class ExportWorker(QThread):
                 
                 self.log(f"[{cut_order}] Track {track_num}: {clip.GetName()} [{vis_start}-{vis_end}]")
 
-                # VFX Shot Code
+                # VFX Shot Code - look up before writing any cells so we can skip early
                 shot_code = None
-                if self.subtitle_track_num is not None:
+                if vfx_source_active:
                     mid = (vis_start + vis_end) / 2
                     shot_code = ""
                     for sub_start, sub_end, text in subtitle_clips:
@@ -690,8 +710,9 @@ class ClipInventoryGUI(QMainWindow):
 
         self.vfx_source_combo = QComboBox()
         self.vfx_source_combo.addItem("Subtitle Track")
-        #self.vfx_source_combo.addItem("Duration Marker")
+        self.vfx_source_combo.addItem("Duration Marker")
         self.vfx_source_combo.setEnabled(False)
+        self.vfx_source_combo.currentTextChanged.connect(self.on_vfx_source_changed)
         vfx_header_row.addWidget(self.vfx_source_combo)
         vfx_header_row.addStretch()
         vfx_outer_layout.addLayout(vfx_header_row)
@@ -806,8 +827,17 @@ class ClipInventoryGUI(QMainWindow):
     def toggle_vfx_shot_code(self, enabled):
         """Enable/disable the VFX shot code source controls."""
         self.vfx_source_combo.setEnabled(enabled)
-        self.subtitle_scroll.setEnabled(enabled)
         self.vfx_only_checkbox.setEnabled(enabled)
+        # Subtitle scroll is only relevant for Subtitle Track mode
+        show_subtitle = enabled and self.vfx_source_combo.currentText() == "Subtitle Track"
+        self.subtitle_scroll.setEnabled(show_subtitle)
+        self.subtitle_scroll.setVisible(show_subtitle)
+
+    def on_vfx_source_changed(self, text):
+        """Show/hide the subtitle track list based on the selected source."""
+        show_subtitle = self.vfx_enable.isChecked() and text == "Subtitle Track"
+        self.subtitle_scroll.setEnabled(show_subtitle)
+        self.subtitle_scroll.setVisible(show_subtitle)
 
     def populate_subtitle_tracks(self, timeline):
         """Populate subtitle track checkboxes from the current timeline."""
@@ -881,13 +911,18 @@ class ClipInventoryGUI(QMainWindow):
             QMessageBox.warning(self, "Error", "Please select at least one track")
             return
 
-        # Get subtitle track for VFX shot codes if enabled
+        # Resolve VFX shot code source
         subtitle_track_num = None
-        if self.vfx_enable.isChecked() and self.vfx_source_combo.currentText() == "Subtitle Track":
-            subtitle_track_num = self.get_selected_subtitle_track()
-            if subtitle_track_num is None:
-                QMessageBox.warning(self, "Error", "Please select a subtitle track for VFX shot codes")
-                return
+        use_duration_markers = False
+        if self.vfx_enable.isChecked():
+            source = self.vfx_source_combo.currentText()
+            if source == "Subtitle Track":
+                subtitle_track_num = self.get_selected_subtitle_track()
+                if subtitle_track_num is None:
+                    QMessageBox.warning(self, "Error", "Please select a subtitle track for VFX shot codes")
+                    return
+            elif source == "Duration Marker":
+                use_duration_markers = True
 
         self.log.clear()
         self.export_btn.setEnabled(False)
@@ -898,7 +933,8 @@ class ClipInventoryGUI(QMainWindow):
         self.last_export_path = output
 
         vfx_only = self.vfx_enable.isChecked() and self.vfx_only_checkbox.isChecked()
-        self.worker = ExportWorker(output, selected_tracks, subtitle_track_num, vfx_only)
+        self.worker = ExportWorker(output, selected_tracks, subtitle_track_num,
+                                   use_duration_markers, vfx_only)
         self.worker.progress.connect(self.update_log)
         self.worker.finished.connect(self.export_done)
         self.worker.start()
