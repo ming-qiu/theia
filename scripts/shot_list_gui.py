@@ -4,6 +4,7 @@ Export VFX shot list with elements from a DaVinci Resolve timeline to Excel.
 """
 
 import os
+import re
 import sys
 import math
 import traceback
@@ -13,7 +14,7 @@ from collections import defaultdict
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QComboBox, QFileDialog,
-    QMessageBox, QProgressBar, QTextEdit, QGroupBox, QSpinBox
+    QMessageBox, QProgressBar, QTextEdit, QGroupBox, QSpinBox, QScrollArea
 )
 from PySide6.QtCore import Qt, QThread, Signal, QUrl
 from PySide6.QtGui import QFont, QIcon, QDesktopServices
@@ -152,135 +153,116 @@ def best_bg_cut_in_tc(bg_elements, fps):
     e = sorted(bg_elements, key=lambda x: x["ClipInFrames"])[0]
     return e["ClipInTC"]
 
-def get_clip_tc(timeline_item, fps):
-    """
-    Works for online/offline items. Assumes clip fps == timeline fps.
-    Returns: dict with ClipInTC, ClipInFrames, ClipOutTC, ClipOutFrames
+def parse_edl(edl_path, fps_str):
+    events = {}   # rec_in_tc -> [event_dict, ...]
+    current = None
 
-    Uses Start TC (from the MediaPoolItem) + GetSourceStartFrame() / GetSourceEndFrame()
-    for frame-accurate absolute source TC values.
+    with open(edl_path, 'r', encoding='utf-8', errors='replace') as f:
+        for raw in f:
+            line = raw.rstrip('\n\r')
 
-    GetSourceStartTime() / GetSourceEndTime() return floats that Resolve derives from an
-    internal rational representation; the float conversion can be imprecise by a fraction
-    of a frame (e.g. 1759.12 → 1759.13999…).  GetSourceStartFrame() / GetSourceEndFrame()
-    are exact integers (left/right trim offsets from the head of the source file), so
-    adding them to the clip's integer Start TC gives an exact result.
-    """
+            # ── Event line ───────────────────────────────────────────────────
+            # NNN  REEL  TRACK  CUT  SRC_IN  SRC_OUT  REC_IN  REC_OUT
+            m = re.match(
+                r'^\d+\s+\S+\s+\S+\s+\S+\s+'
+                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+'   # src_in
+                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+'   # src_out
+                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+'   # rec_in
+                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})',      # rec_out
+                line
+            )
+            if m:
+                src_in, src_out, rec_in, rec_out = [
+                    x.replace(';', ':') for x in m.groups()
+                ]
+                current = {
+                    'src_in':     src_in,
+                    'src_out':    src_out,
+                    'rec_in':     rec_in,
+                    'rec_out':    rec_out,
+                    'retime_fps': None,
+                    'clip_name':  '',
+                }
+                events.setdefault(rec_in, []).append(current)
+                continue
+
+            # ── M2 (motion effect / retime) line ────────────────────────────
+            # M2  REEL  FPS  SRC_TC
+            m2 = re.match(r'^M2\s+\S+\s+([\d.]+)', line)
+            if m2 and current is not None:
+                current['retime_fps'] = float(m2.group(1))
+                continue
+
+            # ── Clip name comment ────────────────────────────────────────────
+            cn = re.match(r'^\*\s*FROM CLIP NAME:\s*(.+)', line)
+            if cn and current is not None:
+                current['clip_name'] = cn.group(1).strip()
+
+    return events
+
+
+def get_clip_tc_from_edl(timeline_item, fps, edl_event=None):
+    if edl_event is None:
+        return read_clip_tc(timeline_item, fps)
+    fps_str = fps_to_str(fps)
+    try:
+        src_in_frames  = Timecode(fps_str, edl_event['src_in']).frames - 1   # 0-indexed inclusive
+        src_out_frames = Timecode(fps_str, edl_event['src_out']).frames - 2  # EDL out is exclusive
+        rec_in_frames  = Timecode(fps_str, edl_event['rec_in']).frames - 1
+        rec_out_frames = Timecode(fps_str, edl_event['rec_out']).frames - 1
+        dur = rec_out_frames - rec_in_frames
+        return {
+            "ClipInTC":      repr(Timecode(fps_str, frames=max(1, src_in_frames + 1))),
+            "ClipInFrames":  src_in_frames,
+            "ClipOutTC":     repr(Timecode(fps_str, frames=max(1, src_out_frames + 1))),
+            "ClipOutFrames": src_out_frames,
+            "ClipDuration":  dur,
+        }
+    except Exception:
+        return read_clip_tc(timeline_item, fps)
+
+def read_clip_tc(timeline_item, fps):
+
+    fps_str = fps_to_str(fps)
+    dur     = int(timeline_item.GetDuration())
+    
+    # ── MediaPoolItem path ─────────────────────────────────────────────────
     mpi = timeline_item.GetMediaPoolItem()
     if mpi:
         try:
             props        = mpi.GetClipProperty() or {}
-            src_fps_str  = props.get("FPS") or fps_to_str(fps)
+            src_fps_str  = props.get("FPS") or fps_str
             src_fps      = float(src_fps_str)
             start_tc_str = props.get("Start TC") or "00:00:00:00"
-
-            # GetLeftOffset() / GetRightOffset() are the left/right trim offsets
-            # (integer frames from the head/tail of the source file to the in/out
-            # point).  Adding them to the integer Start TC frame gives the exact
-            # absolute source frame with no floating-point error.
-            # GetSourceStartFrame() appears to return the same value as
-            # GetLeftOffset(), but GetLeftOffset() has a clearer documented meaning
-            # ("maximum extension from left side" = how far the in-point has been
-            # trimmed from the head of the source).
-            clip_start_tc_frames = Timecode(fps_to_str(src_fps), start_tc_str).frames
-            left  = int(timeline_item.GetLeftOffset())
-            # Duration from the integer frame methods, no fp loss
-            src_dur = int(timeline_item.GetSourceEndFrame()) - int(timeline_item.GetSourceStartFrame())
-            src_in_frames  = clip_start_tc_frames + left
-            src_out_frames = src_in_frames + src_dur
-
-            tc_fps_str    = fps_to_str(fps)
-            tc_in_frames  = max(1, src_in_frames)
-            tc_out_frames = max(1, src_out_frames)
+            # 0-indexed absolute frame of the clip's first source frame
+            mpi_start    = Timecode(fps_to_str(src_fps), start_tc_str).frames - 1
+            src_in_frames  = mpi_start + int(timeline_item.GetSourceStartFrame())
+            src_out_frames = src_in_frames + dur - 1
             return {
-                "ClipInTC":      repr(Timecode(tc_fps_str, frames=tc_in_frames)),
+                "ClipInTC":      repr(Timecode(fps_str, frames=max(1, src_in_frames + 1))),
                 "ClipInFrames":  src_in_frames,
-                "ClipOutTC":     repr(Timecode(tc_fps_str, frames=tc_out_frames)),
+                "ClipOutTC":     repr(Timecode(fps_str, frames=max(1, src_out_frames + 1))),
                 "ClipOutFrames": src_out_frames,
+                "ClipDuration":  dur,
             }
         except Exception:
-            pass  # fall through to float fallback below
+            pass  # fall through
 
-    # Fallback for offline clips (no MediaPoolItem): float-time approximation
-    tin  = timeline_item.GetSourceStartTime()
-    tout = timeline_item.GetSourceEndTime()
-    if tin is not None and tout is not None:
-        src_in_frames  = int(round(tin  * fps))
-        src_out_frames = int(round(tout * fps))
-    elif timeline_item.GetDuration():
-        src_in_frames  = 0
-        src_out_frames = int(timeline_item.GetDuration())
+    # ── Float-time fallback ────────────────────────────────────────────────
+    tin = timeline_item.GetSourceStartTime()
+    if tin is not None:
+        src_in_frames  = int(round(tin * fps))
     else:
         src_in_frames  = 0
-        src_out_frames = 1
+    src_out_frames = src_in_frames + dur - 1
 
-    tc_in_frames  = max(1, src_in_frames)
-    tc_out_frames = max(1, src_out_frames)
     return {
-        "ClipInTC":      repr(Timecode(fps_to_str(fps), frames=tc_in_frames)),
+        "ClipInTC":      repr(Timecode(fps_str, frames=max(1, src_in_frames + 1))),
         "ClipInFrames":  src_in_frames,
-        "ClipOutTC":     repr(Timecode(fps_to_str(fps), frames=tc_out_frames)),
+        "ClipOutTC":     repr(Timecode(fps_str, frames=max(1, src_out_frames + 1))),
         "ClipOutFrames": src_out_frames,
+        "ClipDuration":  dur,
     }
-
-# Common retime fractions (numer, denom) sorted by denominator then numerator.
-# Simpler fractions (smaller denominator) are tried first so that e.g. 3/2
-# beats 8/5 when both are within the frame-rounding tolerance.
-_COMMON_SPEED_FRACS = sorted([
-    (1,1),(2,1),(3,1),(4,1),(5,1),(8,1),(10,1),
-    (1,2),(3,2),(5,2),
-    (1,3),(2,3),(4,3),(5,3),
-    (1,4),(3,4),(5,4),(7,4),(9,4),
-    (1,5),(2,5),(3,5),(4,5),(6,5),(7,5),(8,5),(9,5),
-    (1,6),(5,6),
-    (1,8),(3,8),(5,8),(7,8),
-    (1,10),(3,10),(7,10),(9,10),(11,10),
-    (1,12),
-], key=lambda x: (x[1], x[0]))
-
-def _snap_speed(computed_speed, src_frames, tl_frames):
-    """
-    Snap computed_speed to a clean common retime fraction.
-
-    Only candidates that (a) fall within the frame-rounding tolerance
-    (0.6 / tl_frames) AND (b) predict src_frames exactly are considered.
-
-    Tie-breaking uses two tiers:
-      - If the computed value is already "clean" (error < 0.5 / max(src, tl),
-        meaning the raw frame counts pin the speed accurately), we pick the
-        candidate with the smallest speed error — trusting the measurement.
-      - Otherwise the measurement is too noisy (e.g. 14/9 for a 150% clip)
-        and we prefer the simplest fraction (smallest denominator), so that
-        150% beats 160% even though 1.6 is arithmetically closer to 14/9.
-    """
-    if computed_speed is None or tl_frames <= 0:
-        return computed_speed
-
-    tol     = 0.6 / tl_frames                         # max speed error from ±0.5 frame rounding
-    epsilon = 0.5 / max(src_frames, tl_frames)        # "clean" measurement threshold
-
-    valid = []
-    for numer, denom in _COMMON_SPEED_FRACS:
-        cand = numer / denom
-        err  = abs(cand - computed_speed)
-        if err > tol:
-            continue
-        # Check in the "forward" direction: if Resolve applied this speed to
-        # src_frames, would it round to tl_frames on the timeline?
-        if round(src_frames / cand) != tl_frames:
-            continue
-        valid.append((err, denom, cand))
-
-    if not valid:
-        return computed_speed
-
-    # Any candidate within epsilon of computed means the measurement is trustworthy
-    clean = [(err, denom, cand) for err, denom, cand in valid if err < epsilon]
-    if clean:
-        return min(clean, key=lambda x: (x[0], x[1]))[2]   # smallest error, denom as tiebreak
-
-    # Noisy measurement — prefer the simplest fraction
-    return min(valid, key=lambda x: (x[1], x[0]))[2]       # smallest denom, numer as tiebreak
 
 
 def _is_back_to_back(prev_src_out, curr_src_in, tol=1):
@@ -292,60 +274,66 @@ def _fmt_percent(val):
     return f"{int(round(p))}%" if abs(p - round(p)) < 1e-6 else f"{p:.2f}%"
 
 def retime_summary(elements_by_track, fps):
-    """
-    For each track's elements (within a shot), detect non-linear retimes:
-    - Group consecutive clips by same ReelName when their source frames are back-to-back
-    - Merge grouped clips into a single element representing the non-linear retime
-    - For merged elements, calculate frame mappings showing timeline_frame -> source_frame
-    - Write RetimeSummary as: "x1 -> y1, x2 -> y2, ..."
-    - Sets HasRetime (True if any segment speed != 1 or non-linear retime detected)
-    - MODIFIES elements_by_track in place, replacing groups with merged elements
-    """
     for track_num, track in elements_by_track.items():
         track.sort(key=lambda e: (e["TimelineStart"], e["TimelineEnd"]))
 
         for clip in track:
-            ti = clip["TimelineItem"]
+            ti        = clip["TimelineItem"]
+            tl_dur    = int(ti.GetDuration())
+            edl_event = clip.get("EDLEvent")
 
-            # Use GetSourceStartFrame/EndFrame (integer, frame-accurate) rather than
-            # the float time methods. GetDuration() without args is the timeline
-            # item's playback duration in frames — consistent with the frame methods.
-            try:
-                src_in  = ti.GetSourceStartFrame()
-                src_out = ti.GetSourceEndFrame()
-                tl_dur  = int(ti.GetDuration())
-                src_dur = max(0, int(src_out - src_in))
-            except Exception:
-                src_dur = max(0, int(clip["ClipOutFrames"] - clip["ClipInFrames"]))
-                tl_dur  = int(clip["TimelineEnd"] - clip["TimelineStart"])
+            # ── EDL path: authoritative speed from M2 line ───────────────────
+            if edl_event is not None:
+                retime_fps = edl_event.get('retime_fps')
+                if retime_fps is not None:
+                    # CMX 3600: M2 fps = source frames per timeline second
+                    speed     = retime_fps / fps
+                    has_retime = abs(speed - 1.0) > 1e-3
+                else:
+                    # No M2 line → definitively 100% speed
+                    speed      = 1.0
+                    has_retime = False
+                # Source duration: EDL src_out − src_in (both TC strings → frames)
+                try:
+                    fps_str  = fps_to_str(fps)
+                    src_dur  = (Timecode(fps_str, edl_event['src_out']).frames -
+                                Timecode(fps_str, edl_event['src_in']).frames)
+                except Exception:
+                    src_dur = tl_dur
 
-            speed = (src_dur / tl_dur) if tl_dur > 0 else None
-            speed = _snap_speed(speed, src_dur, tl_dur)
+            # ── Fallback: infer from frame counts ────────────────────────────
+            else:
+                src_dur    = max(0, int(clip["ClipOutFrames"] - clip["ClipInFrames"]))
+                if tl_dur > 0:
+                    raw_speed = src_dur / tl_dur
+                    speed     = _snap_speed(raw_speed, src_dur, tl_dur)
+                else:
+                    speed = None
+                has_retime = tl_dur > 0 and abs(src_dur - tl_dur) > 1
 
             clip["SourceDur"]     = src_dur
             clip["TimelineDur"]   = tl_dur
             clip["Speed"]         = speed
             clip["RetimeFPS"]     = (fps * speed) if speed is not None else None
             clip["RetimeSummary"] = ""
-            # Allow 1-frame tolerance for non-retimed clips (rounding in frame methods)
-            clip["HasRetime"]     = tl_dur > 0 and abs(src_dur - tl_dur) > 1
+            clip["HasRetime"]     = has_retime
 
         merged_track = []
         i = 0
-        n = len(track)
-
-        while i < n:
+        while i < len(track):
             group = [track[i]]
             reel = track[i].get("ReelName", "")
+            clip_duration = track[i].get("TimelineDur", 0)
             j = i + 1
 
-            while j < n:
+            while j < len(track):
                 same_reel = (track[j].get("ReelName", "") == reel)
                 if not same_reel:
                     break
                 if not _is_back_to_back(group[-1]["ClipOutFrames"], track[j]["ClipInFrames"]):
                     break
                 group.append(track[j])
+                clip_duration += track[j].get("TimelineDur", 0)
                 j += 1
 
             any_retime = any(g["HasRetime"] for g in group)
@@ -354,22 +342,12 @@ def retime_summary(elements_by_track, fps):
                 first = group[0]
                 last = group[-1]
 
-                mappings = []
-                current_timeline_frame = first["ClipIn"]
-                current_source_frame = first["ClipIn"]
-
-                mappings.append(f"{current_timeline_frame} -> {current_source_frame}")
-                current_source_frame -= 1
-                current_timeline_frame -= 1
-
+                parts = []
                 for g in group:
-                    timeline_end = current_timeline_frame + g["TimelineDur"]
-                    source_end = current_source_frame + g["SourceDur"]
-                    mappings.append(f"{timeline_end} -> {source_end}")
-                    current_timeline_frame = timeline_end
-                    current_source_frame = source_end
-
-                summary = ", ".join(mappings)
+                    seg_retime_fps = g.get("RetimeFPS") or fps
+                    n = round(g["SourceDur"] * seg_retime_fps / fps)
+                    parts.append(f"{n} @ {fps_to_str(seg_retime_fps)}")
+                summary = ", ".join(parts)
 
                 merged_element = {
                     "TrackIndex": first["TrackIndex"],
@@ -384,6 +362,7 @@ def retime_summary(elements_by_track, fps):
                     "ClipOutTC": last["ClipOutTC"],
                     "ClipInFrames": first["ClipInFrames"],
                     "ClipOutFrames": last["ClipOutFrames"],
+                    "ClipDuration": clip_duration,
                     "RetimeSummary": summary,
                     "ScaleRepo": first["ScaleRepo"],
                     "HasRetime": True,
@@ -396,6 +375,7 @@ def retime_summary(elements_by_track, fps):
                     "TimelineDur": sum(g["TimelineDur"] for g in group) - 1,
                     "Speed": None,
                     "RetimeFPS": None,
+                    "EDLEvent": first.get("EDLEvent"),
                 }
 
                 merged_track.append(merged_element)
@@ -495,13 +475,12 @@ class ShotListWorker(QThread):
     progress = Signal(str)
     finished = Signal(bool, str)
 
-    def __init__(self, frame_counter_track, bottom_track, top_track,
+    def __init__(self, frame_counter_track, track_edl_map,
                  cut_in_frame, old_excel_path, work_handle, scan_handle,
                  output_path, input_sequence, fps):
         super().__init__()
         self.frame_counter_track = frame_counter_track
-        self.bottom_track = bottom_track
-        self.top_track = top_track
+        self.track_edl_map = track_edl_map  # dict: track_num -> edl_path or None
         self.cut_in_frame = cut_in_frame
         self.old_excel_path = old_excel_path
         self.work_handle = work_handle
@@ -536,7 +515,17 @@ class ShotListWorker(QThread):
                 return
 
             fps = self.fps
+            fps_str = fps_to_str(fps)
             self.log(f"Timeline: {timeline.GetName()} | FPS: {fps}")
+
+            # Load user-specified EDLs per video track
+            edl_by_track = {}
+            for track_num, edl_path in self.track_edl_map.items():
+                if edl_path and os.path.exists(edl_path):
+                    self.log(f"Loading EDL for track {track_num}: {os.path.basename(edl_path)}")
+                    edl_by_track[track_num] = parse_edl(edl_path, fps_str)
+                else:
+                    edl_by_track[track_num] = {}
 
             # Load old shot list Excel if provided
             old_shots_dict = None
@@ -554,21 +543,32 @@ class ShotListWorker(QThread):
             fc_items_sorted = sorted(fc_items, key=lambda c: c.GetStart(False))
             self.log(f"Found {len(fc_items_sorted)} frame counter clips on track {self.frame_counter_track}")
 
+            def lookup_edl_event(track_num, frames, clip_name=""):
+                tc = str(Timecode(fps_str, frames=frames + 1))
+                candidates = edl_by_track.get(track_num, {}).get(tc, [])
+                if not candidates:
+                    return None
+                if len(candidates) == 1 or not clip_name:
+                    return candidates[0]
+                stem = clip_name.rsplit('.', 1)[0]
+                for c in candidates:
+                    if stem and stem in c.get('clip_name', ''):
+                        return c
+                return candidates[0]
+
             # Pre-pull video items for element tracks
             v_tracks = timeline.GetTrackCount("video")
             element_labels = {i: element_name_for_track(i) for i in range(1, v_tracks + 1)}
 
             skip_tracks = {self.frame_counter_track}
+            element_tracks = sorted(k for k in self.track_edl_map if k not in skip_tracks)
 
             track_items = {}
-            for i in range(self.bottom_track, self.top_track + 1):
-                if i not in skip_tracks:
-                    track_items[i] = timeline.GetItemListInTrack("video", i) or []
+            for i in element_tracks:
+                track_items[i] = timeline.GetItemListInTrack("video", i) or []
 
             # Pre-scan element tracks for transitions so we can extend element
             # ClipIn/ClipOut by half a dissolve length where needed.
-            element_tracks = [i for i in range(self.bottom_track, self.top_track + 1)
-                              if i not in skip_tracks]
             start_adjustments, end_adjustments, transition_keys = \
                 compute_transition_adjustments(timeline, element_tracks)
             if start_adjustments or end_adjustments:
@@ -580,6 +580,8 @@ class ShotListWorker(QThread):
             elements_rows = []
             cut_order = 0
 
+            # {something}_in / out: VFX frame number, out is inclusive
+            # {something}_start / end: raw frame number, end is non-inclusive
             for fc_item in fc_items_sorted:
                 shot_code = (fc_item.GetName() or "").strip()
                 if not shot_code:
@@ -591,113 +593,80 @@ class ShotListWorker(QThread):
                 shot_dur = shot_end - shot_start
 
                 self.log(f"==== Cut {cut_order}: {shot_code} [{shot_start}-{shot_end}] ====")
-
-                # Get frame numbers from the frame counter clip's source TC
-                tc_info = get_clip_tc(fc_item, fps)
+                tc_info = read_clip_tc(fc_item, fps)
                 cut_in = tc_info['ClipInFrames']
-                cut_out = tc_info['ClipOutFrames'] - 1
+                cut_out = cut_in + int(shot_dur) - 1
                 self.log(f"  Cut In={cut_in}, Cut Out={cut_out}")
 
                 # Collect elements on [bottom..top] tracks
                 elements_by_track = defaultdict(list)
 
-                for track in range(self.bottom_track, self.top_track + 1):
-                    if track in skip_tracks:
-                        continue
+                for track in element_tracks:
 
-                    for clip in (track_items.get(track) or []):
-                        clip_start = clip.GetStart(False)
-                        clip_end   = clip.GetEnd(False)
-                        clip_key   = (track, int(clip_start), int(clip_end))
+                    for elem in (track_items.get(track) or []):
+                        elem_start = elem.GetStart(False)
+                        elem_end   = elem.GetEnd(False)
+                        elem_key   = (track, int(elem_start), int(elem_end))
 
                         # Skip transition items
-                        if clip_key in transition_keys or is_transition_item(clip):
+                        if elem_key in transition_keys or is_transition_item(elem):
                             continue
 
-                        # Skip disabled clips
+                        # Skip disabled elems
                         try:
-                            if not clip.GetClipEnabled():
+                            if not elem.GetClipEnabled():
                                 continue
                         except Exception:
                             pass
 
-                        # Include this clip if its midpoint falls inside the shot.
-                        # Using midpoint (rather than "fully inside") ensures clips
-                        # that dissolve slightly across a shot boundary are still
-                        # assigned to the correct shot.
-                        clip_mid = (clip_start + clip_end) / 2
-                        if not (shot_start <= clip_mid < shot_end):
-                            continue
+                        if elem_start >= shot_start and elem_end <= shot_end:
+                            mpi = elem.GetMediaPoolItem()
+                            elem_props = (mpi.GetClipProperty() if mpi else {}) or {}
 
-                        mpi = clip.GetMediaPoolItem()
-                        clip_props = (mpi.GetClipProperty() if mpi else {}) or {}
+                            reel = elem.GetName()
+                            elem_edl_event = lookup_edl_event(track, elem.GetStart(), reel)
+                            tc_info = get_clip_tc_from_edl(elem, fps, elem_edl_event)
 
-                        reel = clip.GetName()
+                            elem_in_tc = tc_info["ClipInTC"]
+                            elem_out_tc = tc_info["ClipOutTC"]
+                            elem_in_tc_frames = tc_info["ClipInFrames"]
+                            elem_out_tc_frames = tc_info["ClipOutFrames"]
+                            elem_dur = tc_info["ClipDuration"]
 
-                        tc_info = get_clip_tc(clip, fps)
+                            elem_in = int(cut_in + (elem_start - shot_start))
+                            elem_out = int(elem_in + elem_dur - 1)
 
-                        clip_in_tc        = tc_info["ClipInTC"]
-                        clip_out_tc       = tc_info["ClipOutTC"]
-                        clip_in_tc_frames  = tc_info["ClipInFrames"]
-                        clip_out_tc_frames = tc_info["ClipOutFrames"]
+                            props = elem.GetProperty() or {}
+                            scalerpo_sum = summarize_scale_repo(props)
 
-                        # Transition adjustments: half-dissolve frames that extend
-                        # the element's source range beyond the hard-cut boundary.
-                        # Shot CutIn/CutOut are NOT affected — only element frames.
-                        start_adj = start_adjustments.get(clip_key, 0)
-                        end_adj   = end_adjustments.get(clip_key, 0)
+                            elements_by_track[track].append({
+                                "TrackIndex":    track,
+                                "ShotCode":      shot_code,
+                                "ElementName":   element_labels[track],
+                                "TimelineItem":  elem,
+                                "TimelineStart": elem_start,
+                                "TimelineEnd":   elem_end,
+                                "ClipIn":        elem_in,
+                                "ClipOut":       elem_out,
+                                "ClipInTC":      elem_in_tc,
+                                "ClipOutTC":     elem_out_tc,
+                                "ClipInFrames":  elem_in_tc_frames,
+                                "ClipOutFrames": elem_out_tc_frames,
+                                "ClipDuration":  elem_dur,
+                                "HasRetime":     False,
+                                "RetimeSummary": "",
+                                "ScaleRepo":     scalerpo_sum,
+                                "ReelName":      reel,
+                                "Props":         props,
+                                "ClipProps":     elem_props,
+                                "HeadIn":        int(elem_in  - self.scan_handle),
+                                "TailOut":       int(elem_out + self.scan_handle),
+                                "EDLEvent":      elem_edl_event,
+                            })
 
-                        if track == self.bottom_track:
-                            # BG: base clip_in on frame counter cut_in + timeline offset
-                            clip_in  = int(cut_in + (clip_start - shot_start)) - start_adj
-                            clip_out = int(clip_in + start_adj + (clip_out_tc_frames - clip_in_tc_frames)) + end_adj - 1
-                        else:
-                            # Non-BG: align to the BG clip this element overlaps with
-                            matching_bg = None
-                            for bg in elements_by_track.get(self.bottom_track, []):
-                                if bg["TimelineStart"] <= clip_start < bg["TimelineEnd"]:
-                                    matching_bg = bg
-                                    break
-                            if matching_bg:
-                                clip_in  = int(matching_bg["ClipIn"] + (clip_start - matching_bg["TimelineStart"])) - start_adj
-                                clip_out = int(matching_bg["ClipIn"] + (clip_end   - matching_bg["TimelineStart"])) + end_adj - 1
-                            else:
-                                clip_in  = int(cut_in + (clip_start - shot_start)) - start_adj
-                                clip_out = int(cut_in + (clip_end   - shot_start)) + end_adj - 1
-
-                        if start_adj or end_adj:
-                            self.log(f"    Dissolve adj on track {track} '{reel}': "
-                                     f"head -{start_adj}f, tail +{end_adj}f")
-
-                        props = clip.GetProperty() or {}
-                        scalerpo_sum = summarize_scale_repo(props)
-
-                        elements_by_track[track].append({
-                            "TrackIndex":    track,
-                            "ShotCode":      shot_code,
-                            "ElementName":   element_labels[track],
-                            "TimelineItem":  clip,
-                            "TimelineStart": clip_start,
-                            "TimelineEnd":   clip_end,
-                            "ClipIn":        clip_in,
-                            "ClipOut":       clip_out,
-                            "ClipInTC":      clip_in_tc,
-                            "ClipOutTC":     clip_out_tc,
-                            "ClipInFrames":  clip_in_tc_frames,
-                            "ClipOutFrames": clip_out_tc_frames,
-                            "ClipDuration":  clip_out - clip_in + 1,
-                            "HasRetime":     False,
-                            "RetimeSummary": "",
-                            "ScaleRepo":     scalerpo_sum,
-                            "ReelName":      reel,
-                            "Props":         props,
-                            "ClipProps":     clip_props,
-                            "HeadIn":        int(clip_in  - self.scan_handle),
-                            "TailOut":       int(clip_out + 1 + self.scan_handle),
-                        })
-
-                # Shot metadata from BG elements
-                bg_elems = elements_by_track.get(self.bottom_track, [])
+                # Shot metadata from BG elements (lowest element track)
+                bottom_track = element_tracks[0] if element_tracks else None
+                bg_elems = elements_by_track.get(bottom_track, [])
                 cut_in_tc = best_bg_cut_in_tc(bg_elems, fps) if bg_elems else ""
                 shot_editorial_name = shot_editorial_name_from_bg(bg_elems)
 
@@ -706,11 +675,11 @@ class ShotListWorker(QThread):
 
                 retime_summary(elements_by_track, fps)
 
-                bg_retime = "x" if any(e["HasRetime"] for e in elements_by_track.get(self.bottom_track, [])) else ""
+                bg_retime = "x" if any(e["HasRetime"] for e in elements_by_track.get(bottom_track, [])) else ""
                 fg_retime = "x" if any(
                     e["HasRetime"]
                     for track, lst in elements_by_track.items()
-                    if track > self.bottom_track for e in lst
+                    if track != bottom_track for e in lst
                 ) else ""
 
                 # Determine sequence name by input and shot code
@@ -751,6 +720,8 @@ class ShotListWorker(QThread):
                             "ClipOut": int(e["ClipOut"]),
                             "ClipOutFrames": int(e["ClipOutFrames"]),
                             "ClipOutTC": e["ClipOutTC"],
+                            "ClipHeadIn": int(e["HeadIn"]),
+                            "ClipTailOut": int(e["TailOut"]),
                             "ClipDuration": e['ClipDuration'],
                             "Retime": e["RetimeSummary"],
                             "ScaleRepo": e["ScaleRepo"],
@@ -789,7 +760,7 @@ class ShotListWorker(QThread):
                 "Sequence", "Cut Order", "Editorial Name", "Shot Code", "Element",
                 "Cut In", "Cut Out", "Clip Duration",
                 "Clip In TC", "Clip In Frames", "Clip In", "Clip Out", "Clip Out Frames", "Clip Out TC",
-                "Retime Summary", "Scale & Repo"
+                "ScanIn", "ScanOut", "Retime Summary", "Scale & Repo"
             ]
             ws_elems.append(elems_cols)
             for r in elements_rows:
@@ -797,7 +768,7 @@ class ShotListWorker(QThread):
                     r["Sequence"], r["CutOrder"], r["EditorialName"], r["ShotCode"], r["Element"],
                     r["ShotCutIn"], r["ShotCutOut"], r['ClipDuration'],
                     r["ClipInTC"], r["ClipInFrames"], r["ClipIn"], r["ClipOut"], r["ClipOutFrames"], r["ClipOutTC"],
-                    r["Retime"], r["ScaleRepo"]
+                    r["ClipHeadIn"], r["ClipTailOut"], r["Retime"], r["ScaleRepo"]
                 ])
 
             # Auto-width
@@ -815,6 +786,7 @@ class ShotListWorker(QThread):
             wb.save(out_path)
             self.log(f"✓ Wrote Excel: {out_path}")
             self.log(f"  {len(shots_rows)} shots, {len(elements_rows)} elements")
+
             self.finished.emit(True, f"Exported {len(shots_rows)} shots to {os.path.basename(out_path)}")
 
         except Exception as e:
@@ -867,30 +839,28 @@ class ShotListGUI(QMainWindow):
         fc_row.addStretch()
         track_layout.addLayout(fc_row)
 
-        # Bottom / Top tracks
-        bt_row = QHBoxLayout()
-        bt_row.addWidget(QLabel("Bottom Track:"))
-        self.bottom_spin = QSpinBox()
-        self.bottom_spin.setMinimum(1)
-        self.bottom_spin.setMaximum(99)
-        self.bottom_spin.setValue(1)
-        bt_row.addWidget(self.bottom_spin)
-        bt_row.addSpacing(20)
-        bt_row.addWidget(QLabel("Top Track:"))
-        self.top_spin = QSpinBox()
-        self.top_spin.setMinimum(1)
-        self.top_spin.setMaximum(99)
-        self.top_spin.setValue(2)
-        bt_row.addWidget(self.top_spin)
-        bt_row.addStretch()
-
+        # Track EDL assignments
+        edl_header_row = QHBoxLayout()
+        edl_header_row.addWidget(QLabel("Assign an EDL file for each track to process:"))
         refresh_btn = QPushButton("↻")
         refresh_btn.setMaximumWidth(40)
         refresh_btn.setToolTip("Refresh track list from Resolve")
         refresh_btn.clicked.connect(self.populate_tracks)
-        bt_row.addWidget(refresh_btn)
+        edl_header_row.addWidget(refresh_btn)
+        edl_header_row.addStretch()
+        track_layout.addLayout(edl_header_row)
 
-        track_layout.addLayout(bt_row)
+        self.track_rows = {}  # track_num -> QLineEdit
+        self.track_list_widget = QWidget()
+        self.track_list_layout = QVBoxLayout(self.track_list_widget)
+        self.track_list_layout.setSpacing(4)
+        self.track_list_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidget(self.track_list_widget)
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(400)
+        track_layout.addWidget(scroll)
         track_group.setLayout(track_layout)
         layout.addWidget(track_group)
 
@@ -1049,6 +1019,35 @@ class ShotListGUI(QMainWindow):
                 label = f"Track {i}" + (f" ({name})" if name else "")
                 self.counter_track_combo.addItem(label, i)
 
+            # Rebuild track EDL rows (preserve existing paths)
+            old_paths = {num: inp.text() for num, inp in self.track_rows.items()}
+            self.track_rows.clear()
+            while self.track_list_layout.count():
+                item = self.track_list_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+
+            for i in range(track_count, 0, -1):
+                name = timeline.GetTrackName("video", i) or ""
+                label_text = f"Track {i}" + (f"  ({name})" if name else "")
+
+                row_widget = QWidget()
+                row = QHBoxLayout(row_widget)
+                row.setContentsMargins(0, 2, 0, 2)
+                lbl = QLabel(label_text)
+                lbl.setMinimumWidth(140)
+                row.addWidget(lbl)
+                edl_input = QLineEdit(old_paths.get(i, ""))
+                edl_input.setPlaceholderText("No EDL")
+                row.addWidget(edl_input)
+                browse_btn = QPushButton("Browse EDL...")
+                browse_btn.setMaximumWidth(110)
+                browse_btn.clicked.connect(lambda checked, inp=edl_input: self._browse_edl(inp))
+                row.addWidget(browse_btn)
+
+                self.track_rows[i] = edl_input
+                self.track_list_layout.addWidget(row_widget)
+
             # Try to auto-detect FPS from timeline
             try:
                 fps = get_timeline_fps(timeline)
@@ -1065,6 +1064,15 @@ class ShotListGUI(QMainWindow):
 
         except Exception as e:
             self.log.append(f"⚠️  Resolve connection error: {e}")
+
+    def _browse_edl(self, line_edit):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select EDL",
+            line_edit.text() or str(Path.home() / "Downloads"),
+            "EDL Files (*.edl);;All Files (*)"
+        )
+        if path:
+            line_edit.setText(path)
 
     def on_fps_changed(self, text):
         if text == "Custom...":
@@ -1143,10 +1151,15 @@ class ShotListGUI(QMainWindow):
         self.progress.show()
         self.last_export_path = output
 
+        track_edl_map = {
+            num: inp.text().strip()
+            for num, inp in self.track_rows.items()
+            if num != frame_counter_track and inp.text().strip()
+        }
+
         self.worker = ShotListWorker(
             frame_counter_track=frame_counter_track,
-            bottom_track=self.bottom_spin.value(),
-            top_track=self.top_spin.value(),
+            track_edl_map=track_edl_map,
             cut_in_frame=self.cut_in_spin.value(),
             old_excel_path=old_excel_path,
             work_handle=self.work_handle_spin.value(),
