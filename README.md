@@ -56,8 +56,6 @@ Shot boundaries, shot codes, and frame numbers all come from a single **frame co
 
 _Requires clean timelines!_ Make sure to consolidate all BG elements down to one track.
 
-Each element track must have a corresponding **EDL file** assigned (CMX 3600 format, exported from Resolve). Clip In/Out timecodes are read directly from the EDL's source (`src_in`/`src_out`) and record (`rec_in`/`rec_out`) entries, with retime speed taken from the M2 line when present. Tracks without an EDL assigned are excluded from processing. Retimes are detected and summarised automatically (percentage for simple retimes, frame-mapped table for non-linear retimes across merged clips).
-
 Optionally compare against a previous shot list Excel to flag cuts that have changed.
 
 ## Installation
@@ -132,7 +130,7 @@ Tools can also be run directly:
 ### Export a VFX shot list
 
 1. Ensure your timeline has a frame counter track with clips named by VFX shot code
-2. Export an EDL for each element track from Resolve (File → Export → Timeline → CMX 3600 EDL), one EDL per track
+2. Export an EDL for each element track from Resolve
 3. Launch **Shot List** from Scripts menu
 4. Select the frame counter track
 5. In the track list, assign the corresponding EDL file to each element track you want to process — tracks without an EDL are skipped
