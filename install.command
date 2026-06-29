@@ -48,6 +48,46 @@ if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" 
 fi
 
 echo "✓ Found Python $PYTHON_VERSION"
+
+# Check ffmpeg
+echo ""
+echo "Checking ffmpeg installation..."
+if command -v ffmpeg &> /dev/null; then
+    echo "✓ Found ffmpeg ($(ffmpeg -version 2>&1 | head -1 | cut -d' ' -f3))"
+else
+    echo "  ffmpeg not found."
+    echo ""
+    read -p "  Would you like us to install ffmpeg via Homebrew? [y/n]: " INSTALL_FFMPEG
+    if [[ "$INSTALL_FFMPEG" =~ ^[Yy]$ ]]; then
+        if ! command -v brew &> /dev/null; then
+            echo ""
+            echo "ERROR: Homebrew is not installed. Please install Homebrew first:"
+            echo "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+            echo ""
+            echo "Then re-run this installer."
+            read -p "Press Enter to exit..."
+            exit 1
+        fi
+        echo ""
+        echo "Installing ffmpeg via Homebrew (this may take a few minutes)..."
+        brew install ffmpeg
+        if [ $? -ne 0 ]; then
+            echo "ERROR: Failed to install ffmpeg."
+            read -p "Press Enter to exit..."
+            exit 1
+        fi
+        echo "✓ ffmpeg installed"
+    else
+        echo ""
+        echo "ffmpeg is required by Theia. To install it manually:"
+        echo "  • Homebrew:  brew install ffmpeg"
+        echo "  • Direct:    https://ffmpeg.org/download.html"
+        echo ""
+        echo "Re-run this installer after ffmpeg is installed."
+        read -p "Press Enter to exit..."
+        exit 1
+    fi
+fi
 echo "  Using: $PYTHON_CMD"
 
 # Check architecture - detect what architecture Python is actually running as
@@ -172,15 +212,11 @@ echo "======================================"
 echo "Installation Complete!"
 echo "======================================"
 echo ""
-echo "Theia tools installed system-wide:"
+echo "Theia tools installed:"
 echo "  Location: $THEIA_DIR"
-echo "  Available to: All users"
 echo ""
-echo "Bridge scripts installed for current user:"
+echo "Bridge scripts installed:"
 echo "  Location: $RESOLVE_DIR"
-echo ""
-echo "Note: Each user needs to run this installer once to"
-echo "      set up their personal Resolve bridge scripts."
 echo ""
 echo "In DaVinci Resolve:"
 echo "  Workspace → Scripts → Edit → [Tool Name]"
