@@ -549,13 +549,14 @@ class ShotListWorker(QThread):
                 shot_dur = shot_end - shot_start
 
                 self.log(f"==== Cut {cut_order}: {shot_code} [{shot_start}-{shot_end}] ====")
-                tc_info = read_clip_tc(fc_item, fps)
-                cut_in = tc_info['ClipInFrames']
+                fc_tc_info = read_clip_tc(fc_item, fps)
+                cut_in = fc_tc_info['ClipInFrames']
                 cut_out = cut_in + int(shot_dur) - 1
                 self.log(f"  Cut In={cut_in}, Cut Out={cut_out}")
 
                 # Collect elements on [bottom..top] tracks
                 elements_by_track = defaultdict(list)
+                first_elem_in_shot = True
 
                 for track in element_tracks:
 
@@ -587,13 +588,17 @@ class ShotListWorker(QThread):
                             tc_info = get_clip_tc_from_edl(elem, fps, elem_edl_event)
 
                             elem_dur = tc_info["ClipDuration"]
-                            elem_in = int(cut_in + elem_start - shot_start)
+                            elem_in = int(fc_tc_info['ClipInFrames'] + elem_start - shot_start)
+
                             if "dissolve_in" in elem_edl_event:
-                                elem_in -= elem_edl_event['dissolve_in']
+                                if first_elem_in_shot:
+                                    elem_in -= elem_edl_event['dissolve_in']
                                 cut_in -= elem_edl_event['dissolve_in']
                             elem_out = int(elem_in + elem_dur - 1)
+
                             if "dissolve_out" in elem_edl_event:
                                 cut_out += elem_edl_event['dissolve_out']
+                            first_elem_in_shot = False
 
                             retime_fps = elem_edl_event.get('retime_fps')
                             if retime_fps is not None:
@@ -727,7 +732,7 @@ class ShotListWorker(QThread):
             ws_elems = wb.create_sheet(title="Elements")
             elems_cols = [
                 "Sequence", "Cut Order", "Editorial Name", "Shot Code", "Element",
-                "Cut In", "Cut Out", "Clip Duration",
+                "Cut In", "Cut Out", "Clip Duration (with dissolve before retime)",
                 "Clip In TC", "Clip In Frames", "Clip In", "Clip Out", "Clip Out Frames", "Clip Out TC",
                 "ScanIn", "ScanOut", "Retime Summary", "Scale & Repo"
             ]
