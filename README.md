@@ -170,3 +170,5 @@ theia/
 **"No project/timeline is currently open"** — Open a project and timeline in Resolve before launching scripts.
 
 **Architecture issues on Apple Silicon** — The installer detects ARM64 vs x86_64 and handles Rosetta compatibility automatically. If you have issues, try reinstalling with Homebrew Python (`brew install python`).
+
+**Clip inventory misses a few thumbnails** - This is a known issue that happens on the first run of Clip Inventory. Try running it again.
