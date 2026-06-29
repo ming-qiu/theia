@@ -357,13 +357,13 @@ def retime_summary(elements_by_track, fps, scan_handle):
 
 def summarize_scale_repo(props):
     zx = safe_get(props, "ZoomX")
-    px = safe_get(props, "PositionX")
-    py = safe_get(props, "PositionY")
+    px = safe_get(props, "Pan")
+    py = safe_get(props, "Tilt")
     parts = []
     if zx is not None and str(zx).strip() not in ('', 'None') and zx != 1:
         parts.append(f"Scale: {_fmt_percent(zx)}")
-    if px is not None or py is not None:
-        parts.append(f"Repo: {px},{py}")
+    if (px is not None or py is not None) and (abs(px) > 1e-2 or abs(py) > 1e-2):
+        parts.append(f"Repo: {px:.2f},{py:.2f}")
     return " ".join(parts)
 
 # -------- Old Excel loading --------
