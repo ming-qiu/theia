@@ -1,5 +1,7 @@
 # Theia 明察秋毫
 
+📖 [Full documentation](https://theia-docs.ming-q.com)
+
 💚 🍵 [Buy Ming a tea to show your support](https://buymeacoffee.com/ming_qiu)
 
 A suite of VFX editorial tools for DaVinci Resolve Studio.
