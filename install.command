@@ -190,6 +190,12 @@ for gui_script in "$INSTALLER_DIR"/scripts/*_gui.py; do
     fi
 done
 
+# Copy the installed release version for the updater
+if [ -f "$INSTALLER_DIR/VERSION" ]; then
+    cp "$INSTALLER_DIR/VERSION" "$THEIA_DIR/VERSION"
+    echo "  ✓ Version $(cat "$INSTALLER_DIR/VERSION")"
+fi
+
 # Copy resources (styles and icons)
 if [ -d "$INSTALLER_DIR/resources" ]; then
     cp -R "$INSTALLER_DIR/resources/"* "$THEIA_DIR/resources/"

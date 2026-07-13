@@ -85,6 +85,12 @@ The installer will:
 
 Each user needs to run the installer once to set up their Resolve bridge scripts.
 
+### Updates
+
+Choose **Workspace → Scripts → Edit → Theia → 00 Update Theia** in Resolve. The
+updater compares the installed `VERSION` file with versioned GitHub branches such
+as `release/v1.1.0`, then offers to download and open the latest installer.
+
 ### Prep Your Resolve
 
 Make sure the DaVinci Resolve scripting API is set up. In Resolve, go to `Help → Documentation → Developer`. In the directory that opens, find the Scripting folder and follow the instructions in README.txt.
@@ -146,12 +152,15 @@ Tools can also be run directly:
 theia/
 ├── install.command          # macOS installer
 ├── uninstall.command        # macOS uninstaller
+├── VERSION                  # Installed release version used by the updater
 ├── bridges/                 # DaVinci Resolve bridge scripts
+│   ├── 00 Update Theia.py
 │   ├── 01 Clip Inventory.py
 │   ├── 02 Frame Counter.py
 │   ├── 03 Add Metadata.py
 │   └── 04 Shot List.py
 ├── scripts/                 # GUI applications
+│   ├── update_gui.py
 │   ├── add_metadata_gui.py
 │   ├── clip_inventory_gui.py
 │   ├── frame_counter_gui.py
