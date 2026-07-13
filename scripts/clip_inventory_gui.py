@@ -564,7 +564,7 @@ class ExportWorker(QThread):
 
                 # Thumbnail - grab past the transition so Color UI lands on the right clip
                 if media_item:
-                    thumb_frame = raw_start + range_info['start_adj']
+                    thumb_frame = int((vis_start + vis_end) / 2)
                     thumb = self.get_thumbnail(timeline, thumb_frame, fps, target_track_num=track_num)
                     if thumb:
                         buf = BytesIO()
