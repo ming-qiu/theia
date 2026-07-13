@@ -6,11 +6,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QLabel, QMainWindow, QMessageBox, QProgressBar,
     QPushButton, QVBoxLayout, QWidget,
@@ -42,15 +41,22 @@ class CheckWorker(QThread):
 
     def run(self):
         try:
-            request = urllib.request.Request(
-                f"https://api.github.com/repos/{GITHUB_REPOSITORY}/branches?per_page=100",
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "Theia-Updater",
-                },
+            result = subprocess.run(
+                [
+                    "/usr/bin/curl", "-fsSL", "--retry", "3",
+                    "--connect-timeout", "15", "--max-time", "45",
+                    "--proto", "=https",
+                    "-H", "Accept: application/vnd.github+json",
+                    "-H", "User-Agent: Theia-Updater",
+                    f"https://api.github.com/repos/{GITHUB_REPOSITORY}/branches?per_page=100",
+                ],
+                capture_output=True,
+                text=True,
             )
-            with urllib.request.urlopen(request, timeout=20) as response:
-                branches = json.load(response)
+            if result.returncode != 0:
+                message = result.stderr.strip() or f"curl exited with status {result.returncode}"
+                raise RuntimeError(message)
+            branches = json.loads(result.stdout)
 
             releases = []
             for branch in branches:
@@ -63,8 +69,6 @@ class CheckWorker(QThread):
 
             _, version, branch = max(releases)
             self.finished.emit(True, version, branch)
-        except urllib.error.HTTPError as error:
-            self.finished.emit(False, "", f"GitHub returned HTTP {error.code}.")
         except Exception as error:
             self.finished.emit(False, "", str(error))
 
@@ -84,13 +88,20 @@ class DownloadWorker(QThread):
                 f"https://github.com/{GITHUB_REPOSITORY}/archive/refs/heads/"
                 f"{self.branch}.tar.gz"
             )
-            request = urllib.request.Request(url, headers={"User-Agent": "Theia-Updater"})
-            with urllib.request.urlopen(request, timeout=60) as response, open(archive, "wb") as output:
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    output.write(chunk)
+            with open(archive, "wb") as output:
+                result = subprocess.run(
+                    [
+                        "/usr/bin/curl", "-fL", "--retry", "3",
+                        "--connect-timeout", "15", "--max-time", "300",
+                        "--proto", "=https", "-H", "User-Agent: Theia-Updater",
+                        url,
+                    ],
+                    stdout=output,
+                    stderr=subprocess.PIPE,
+                )
+            if result.returncode != 0:
+                message = result.stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(message or f"curl exited with status {result.returncode}")
 
             extract_dir = work_dir / "release"
             extract_dir.mkdir()
@@ -241,6 +252,12 @@ class UpdateGUI(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+
+    theia_dir = Path("/Library/Application Support/Theia")
+    icon_path = theia_dir / "resources" / "graphics" / "clip_inventory_icon.png"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+
     window = UpdateGUI()
     window.show()
     sys.exit(app.exec())
