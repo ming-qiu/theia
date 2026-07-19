@@ -220,7 +220,7 @@ def read_clip_tc(timeline_item, fps):
             src_fps      = float(src_fps_str)
             start_tc_str = props.get("Start TC") or "00:00:00:00"
             # 0-indexed absolute frame of the clip's first source frame
-            mpi_start    = Timecode(fps_to_str(src_fps), start_tc_str).frames - 1
+            mpi_start    = Timecode(fps_to_str(src_fps), start_tc_str).frames# - 1
             src_in_frames  = mpi_start + int(timeline_item.GetSourceStartFrame())
             src_out_frames = src_in_frames + dur - 1
             return {
