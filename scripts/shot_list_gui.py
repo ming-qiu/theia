@@ -56,6 +56,24 @@ def safe_get(d, k, default=None):
         return default
 
 
+def transition_is_enveloped(transitions, elem_start, elem_end,
+                             shot_start, shot_end, edge):
+    """Return whether the frame counter contains the transition at a clip edge."""
+    boundary = elem_start if edge == "in" else elem_end
+    for transition in transitions:
+        trans_start = transition.GetStart(False)
+        trans_end = transition.GetEnd(False)
+        if edge == "in":
+            attached_to_edge = trans_start <= boundary < trans_end
+        else:
+            attached_to_edge = trans_start < boundary <= trans_end
+        if (attached_to_edge
+                and shot_start <= trans_start
+                and trans_end <= shot_end):
+            return True
+    return False
+
+
 def element_name_for_track(idx):
     if idx == 1:
         return "ScanBg"
@@ -87,6 +105,7 @@ def parse_edl(edl_path, fps_str):
     events       = []     # ordered list of event dicts (one per real clip, in EDL order)
     current      = None   # last event (for clip-name attachment)
     m2_target    = None   # event that should receive the next M2 line
+    m2_candidates = []    # (source TC, event) candidates around a dissolve
     prev_stored  = None   # last event that was appended to events
 
     with open(edl_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -115,15 +134,21 @@ def parse_edl(edl_path, fps_str):
                     'retime_fps': None,
                     'clip_name':  '',
                 }
-                m2_target = current
                 if rec_in != rec_out:
                     # Normal cut — append in EDL order
                     events.append(current)
                     prev_stored = current
+                    m2_target = current
+                    m2_candidates = [(src_in, current)]
+                else:
+                    # The zero-duration marker represents the outgoing side of
+                    # the following dissolve. Associate its source TC with the
+                    # stored outgoing event rather than this discarded marker.
+                    m2_target = prev_stored
+                    m2_candidates = [(src_in, prev_stored)] if prev_stored else []
                 # Zero-duration C lines are dissolve FROM-clip markers.
                 # Don't store them (would collide with the D event at the same key),
-                # but keep current/m2_target pointing at them so any following M2
-                # line correctly targets the FROM clip, not the incoming D clip.
+                # but keep current pointing at them for the following D line.
                 continue
 
             # ── D (dissolve) event line ───────────────────────────────────────
@@ -157,15 +182,32 @@ def parse_edl(edl_path, fps_str):
                 }
                 events.append(current)
                 prev_stored = current
-                # m2_target intentionally left pointing at the zero-dur C event
-                # (the FROM clip's dissolve-tail retime), not the incoming clip.
+                # An M2 after a dissolve can describe either side. Its source TC
+                # disambiguates the outgoing marker from the incoming D event.
+                m2_candidates.append((src_in, current))
+                m2_target = current
                 continue
 
             # ── M2 (motion effect / retime) line ─────────────────────────────
             # M2  REEL  FPS  SRC_TC
-            m2 = re.match(r'^M2\s+\S+\s+([\d.]+)', line)
-            if m2 and m2_target is not None:
-                m2_target['retime_fps'] = float(m2.group(1))
+            m2 = re.match(
+                r'^M2\s+\S+\s+([\d.]+)(?:\s+'
+                r'(\d{2}:\d{2}:\d{2}[:;]\d{2}))?',
+                line
+            )
+            if m2:
+                target = m2_target
+                m2_src_tc = m2.group(2)
+                if m2_src_tc:
+                    m2_src_tc = m2_src_tc.replace(';', ':')
+                    # Prefer the incoming event if both sides happen to use the
+                    # same source TC; it is the event immediately before M2.
+                    for candidate_tc, candidate in reversed(m2_candidates):
+                        if candidate is not None and candidate_tc == m2_src_tc:
+                            target = candidate
+                            break
+                if target is not None:
+                    target['retime_fps'] = float(m2.group(1))
                 continue
 
             # ── FROM CLIP NAME comment ────────────────────────────────────────
@@ -518,6 +560,7 @@ class ShotListWorker(QThread):
             element_tracks = sorted(k for k in self.track_edl_map if k not in skip_tracks)
 
             track_items = {}
+            track_transitions = {}
             # Resolve transition names — these appear as timeline items but are not clips
             # and have no entry in the EDL. Extend this set if new transition types appear.
             RESOLVE_TRANSITIONS = {
@@ -527,6 +570,9 @@ class ShotListWorker(QThread):
 
             for i in element_tracks:
                 all_items = timeline.GetItemListInTrack("video", i) or []
+                track_transitions[i] = [
+                    it for it in all_items if it.GetName() in RESOLVE_TRANSITIONS
+                ]
                 # Exclude built-in transitions; keep all other items (clips, generators,
                 # placeholders) so index alignment with the EDL is preserved.
                 track_items[i] = [it for it in all_items if it.GetName() not in RESOLVE_TRANSITIONS]
@@ -591,13 +637,33 @@ class ShotListWorker(QThread):
                             elem_in = int(fc_tc_info['ClipInFrames'] + elem_start - shot_start)
 
                             if "dissolve_in" in elem_edl_event:
-                                if first_elem_in_shot:
-                                    elem_in -= elem_edl_event['dissolve_in']
-                                cut_in -= elem_edl_event['dissolve_in']
+                                dissolve_is_enveloped = transition_is_enveloped(
+                                    track_transitions.get(track, []),
+                                    elem_start, elem_end, shot_start, shot_end, "in"
+                                )
+                                if dissolve_is_enveloped:
+                                    self.log(
+                                        f"  {reel}: incoming dissolve is inside the "
+                                        "frame counter; keeping Cut In unchanged"
+                                    )
+                                else:
+                                    if first_elem_in_shot:
+                                        elem_in -= elem_edl_event['dissolve_in']
+                                    cut_in -= elem_edl_event['dissolve_in']
                             elem_out = int(elem_in + elem_dur - 1)
 
                             if "dissolve_out" in elem_edl_event:
-                                cut_out += elem_edl_event['dissolve_out']
+                                dissolve_is_enveloped = transition_is_enveloped(
+                                    track_transitions.get(track, []),
+                                    elem_start, elem_end, shot_start, shot_end, "out"
+                                )
+                                if dissolve_is_enveloped:
+                                    self.log(
+                                        f"  {reel}: outgoing dissolve is inside the "
+                                        "frame counter; keeping Cut Out unchanged"
+                                    )
+                                else:
+                                    cut_out += elem_edl_event['dissolve_out']
                             first_elem_in_shot = False
 
                             retime_fps = elem_edl_event.get('retime_fps')
