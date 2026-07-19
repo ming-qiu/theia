@@ -89,9 +89,9 @@ class ExportWorker(QThread):
     def get_visible_clips(self, timeline):
         """Get all visible clips considering track layering, but ignore transitions.
         Handles dissolves/transitions by classifying them into:
-          - type1: connecting two clips on same track (treat as hard cut)
-          - type2: sitting at end of a clip (ignore transition)
-          - type3: sitting at beginning of a clip (apply 0.5 * dissolve length to that clip's start)
+          - type1: connecting two clips on the same or a lower track (treat as hard cut)
+          - type2: fading from a clip to nothing (extend that clip's end)
+          - type3: fading from nothing to a clip (extend that clip's start)
         Returns a list of dicts: { 'clip', 'track_num', 'clip_start', 'clip_end', 'visible_ranges' }
         """
         track_count = timeline.GetTrackCount("video")
@@ -117,6 +117,25 @@ class ExportWorker(QThread):
                 return False
             except Exception:
                 return False
+
+        def find_lower_clip(track_num, start, end):
+            """Find an enabled, selected clip below track_num that overlaps a range."""
+            for lower_track_num in range(track_num - 1, min_track - 1, -1):
+                if self.selected_tracks and lower_track_num not in self.selected_tracks:
+                    continue
+
+                lower_items = timeline.GetItemListInTrack("video", lower_track_num) or []
+                for lower_item in lower_items:
+                    if is_transition_item(lower_item):
+                        continue
+                    try:
+                        if not lower_item.GetClipEnabled():
+                            continue
+                    except Exception:
+                        pass
+                    if lower_item.GetStart() < end and lower_item.GetEnd() > start:
+                        return lower_track_num, lower_item
+            return None
 
         # Pre-scan to compute per-clip start adjustments for type-3 (beginning-of-clip) transitions
         # Use (track, start, end) tuples as keys instead of id() to avoid
@@ -152,16 +171,19 @@ class ExportWorker(QThread):
                 # Type1: overlaps both -> connecting two clips on same track
                 if overlaps_prev and overlaps_next:
                     self.log(f"  Transition on track {track_num} connecting two clips ({trans_start}-{trans_end}) -> type1: {adj} frames")
-                    if prev_item is not None:
-                        prev_key = (track_num, int(prev_item.GetStart()), int(prev_item.GetEnd()))
-                        end_adjustments[prev_key] = adj
-                    if next_item is not None:
-                        next_key = (track_num, int(next_item.GetStart()), int(next_item.GetEnd()))
-                        start_adjustments[next_key] = adj
                     continue
 
                 # Type2: overlaps previous only -> sitting at end of a clip
                 if overlaps_prev and not overlaps_next:
+                    lower_clip = find_lower_clip(track_num, trans_start, trans_end)
+                    if lower_clip is not None:
+                        lower_track_num, lower_item = lower_clip
+                        self.log(
+                            f"  Transition on track {track_num} connects {prev_item.GetName()} "
+                            f"to lower-track clip {lower_item.GetName()} on track {lower_track_num} "
+                            f"({trans_start}-{trans_end}) -> type1 hard cut"
+                        )
+                        continue
                     self.log(f"  Transition on track {track_num} at end of clip ({trans_start}-{trans_end}) -> type2: {adj} frames")
                     if prev_item is not None:
                         prev_key = (track_num, int(prev_item.GetStart()), int(prev_item.GetEnd()))
@@ -170,6 +192,15 @@ class ExportWorker(QThread):
 
                 # Type3: overlaps next only -> transition at beginning of clip
                 if overlaps_next and not overlaps_prev and next_item is not None:
+                    lower_clip = find_lower_clip(track_num, trans_start, trans_end)
+                    if lower_clip is not None:
+                        lower_track_num, lower_item = lower_clip
+                        self.log(
+                            f"  Transition on track {track_num} connects lower-track clip "
+                            f"{lower_item.GetName()} on track {lower_track_num} to {next_item.GetName()} "
+                            f"({trans_start}-{trans_end}) -> type1 hard cut"
+                        )
+                        continue
                     self.log(f"  Transition on track {track_num} at start of next clip ({trans_start}-{trans_end}) -> type3: {adj} frames")
                     next_key = (track_num, int(next_item.GetStart()), int(next_item.GetEnd()))
                     start_adjustments[next_key] = adj
