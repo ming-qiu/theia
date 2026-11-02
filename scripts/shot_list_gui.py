@@ -253,29 +253,31 @@ def read_clip_tc(timeline_item, fps):
     fps_str = fps_to_str(fps)
     dur     = int(timeline_item.GetDuration())
     
-    # ── MediaPoolItem path ─────────────────────────────────────────────────
-    mpi = timeline_item.GetMediaPoolItem()
-    if mpi:
-        try:
-            props        = mpi.GetClipProperty() or {}
-            src_fps_str  = props.get("FPS") or fps_str
-            src_fps      = float(src_fps_str)
-            start_tc_str = props.get("Start TC") or "00:00:00:00"
-            # 0-indexed absolute frame of the clip's first source frame
-            mpi_start    = Timecode(fps_to_str(src_fps), start_tc_str).frames - 1
-            src_in_frames  = mpi_start + int(timeline_item.GetSourceStartFrame())
-            src_out_frames = src_in_frames + dur - 1
-            return {
-                "ClipInTC":      repr(Timecode(fps_str, frames=max(1, src_in_frames + 1))),
-                "ClipInFrames":  src_in_frames,
-                "ClipOutTC":     repr(Timecode(fps_str, frames=max(1, src_out_frames + 1))),
-                "ClipOutFrames": src_out_frames,
-                "ClipDuration":  dur,
-            }
-        except Exception:
-            pass  # fall through
+    # Disabled: Start TC + GetSourceStartFrame() was one frame behind
+    # GetSourceStartTime() for the tested 25 fps frame counters.
+    # ── MediaPoolItem path (disabled) ──────────────────────────────────────
+    # mpi = timeline_item.GetMediaPoolItem()
+    # if mpi:
+    #     try:
+    #         props        = mpi.GetClipProperty() or {}
+    #         src_fps_str  = props.get("FPS") or fps_str
+    #         src_fps      = float(src_fps_str)
+    #         start_tc_str = props.get("Start TC") or "00:00:00:00"
+    #         # 0-indexed absolute frame of the clip's first source frame
+    #         mpi_start    = Timecode(fps_to_str(src_fps), start_tc_str).frames - 1
+    #         src_in_frames  = mpi_start + int(timeline_item.GetSourceStartFrame())
+    #         src_out_frames = src_in_frames + dur - 1
+    #         return {
+    #             "ClipInTC":      repr(Timecode(fps_str, frames=max(1, src_in_frames + 1))),
+    #             "ClipInFrames":  src_in_frames,
+    #             "ClipOutTC":     repr(Timecode(fps_str, frames=max(1, src_out_frames + 1))),
+    #             "ClipOutFrames": src_out_frames,
+    #             "ClipDuration":  dur,
+    #         }
+    #     except Exception:
+    #         pass  # fall through
 
-    # ── Float-time fallback ────────────────────────────────────────────────
+    # Calculate the source position from Resolve's source time.
     tin = timeline_item.GetSourceStartTime()
     if tin is not None:
         src_in_frames  = int(round(tin * fps))
