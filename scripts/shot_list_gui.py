@@ -101,125 +101,110 @@ def best_bg_cut_in_tc(bg_elements, fps):
     e = sorted(bg_elements, key=lambda x: x["ClipInFrames"])[0]
     return e["ClipInTC"]
 
-def parse_edl(edl_path, fps_str):
-    events       = []     # ordered list of event dicts (one per real clip, in EDL order)
-    current      = None   # last event (for clip-name attachment)
-    m2_target    = None   # event that should receive the next M2 line
-    m2_candidates = []    # (source TC, event) candidates around a dissolve
-    prev_stored  = None   # last event that was appended to events
+def parse_edl(edl_path):
+    """Parse an EDL from a string or pathlib.Path file path."""
+    events = []
+    current = None
+    m2_target = None
+    m2_candidates = []
+    previous_stored = None
 
-    with open(edl_path, 'r', encoding='utf-8', errors='replace') as f:
-        for raw in f:
-            line = raw.rstrip('\n\r')
-
-            # ── C (cut) event line ────────────────────────────────────────────
-            # NNN  REEL  TRACK  C  SRC_IN  SRC_OUT  REC_IN  REC_OUT
-            m = re.match(
-                r'^\d+\s+\S+\s+\S+\s+[Cc]\s+'
-                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+'   # src_in
-                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+'   # src_out
-                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+'   # rec_in
-                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})',      # rec_out
-                line
+    with Path(edl_path).open("r", encoding="utf-8", errors="replace") as stream:
+        for raw in stream:
+            line = raw.rstrip("\n\r")
+            cut = re.match(
+                r"^\d+\s+(\S+)\s+\S+\s+[Cc]\s+"
+                r"(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+"
+                r"(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+"
+                r"(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+"
+                r"(\d{2}:\d{2}:\d{2}[:;]\d{2})",
+                line,
             )
-            if m:
-                src_in, src_out, rec_in, rec_out = [
-                    x.replace(';', ':') for x in m.groups()
-                ]
+            if cut:
+                reel_name = cut.group(1)
+                src_in, src_out, rec_in, rec_out = (
+                    value.replace(";", ":") for value in cut.groups()[1:]
+                )
                 current = {
-                    'src_in':     src_in,
-                    'src_out':    src_out,
-                    'rec_in':     rec_in,
-                    'rec_out':    rec_out,
-                    'retime_fps': None,
-                    'clip_name':  '',
+                    "reel_name": reel_name,
+                    "src_in": src_in,
+                    "src_out": src_out,
+                    "rec_in": rec_in,
+                    "rec_out": rec_out,
+                    "retime_fps": None,
+                    "clip_name": "",
                 }
                 if rec_in != rec_out:
-                    # Normal cut — append in EDL order
                     events.append(current)
-                    prev_stored = current
+                    previous_stored = current
                     m2_target = current
                     m2_candidates = [(src_in, current)]
                 else:
-                    # The zero-duration marker represents the outgoing side of
-                    # the following dissolve. Associate its source TC with the
-                    # stored outgoing event rather than this discarded marker.
-                    m2_target = prev_stored
-                    m2_candidates = [(src_in, prev_stored)] if prev_stored else []
-                # Zero-duration C lines are dissolve FROM-clip markers.
-                # Don't store them (would collide with the D event at the same key),
-                # but keep current pointing at them for the following D line.
+                    m2_target = previous_stored
+                    m2_candidates = (
+                        [(src_in, previous_stored)] if previous_stored else []
+                    )
                 continue
 
-            # ── D (dissolve) event line ───────────────────────────────────────
-            # NNN  REEL  TRACK  D  DUR  SRC_IN  SRC_OUT  REC_IN  REC_OUT
-            d = re.match(
-                r'^\d+\s+\S+\s+\S+\s+[Dd]\s+(\d+)\s+'
-                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+'   # src_in  (incoming clip)
-                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+'   # src_out
-                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+'   # rec_in  (dissolve start)
-                r'(\d{2}:\d{2}:\d{2}[:;]\d{2})',      # rec_out (clip end)
-                line
+            dissolve = re.match(
+                r"^\d+\s+(\S+)\s+\S+\s+[Dd]\s+(\d+)\s+"
+                r"(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+"
+                r"(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+"
+                r"(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+"
+                r"(\d{2}:\d{2}:\d{2}[:;]\d{2})",
+                line,
             )
-            if d:
-                dissolve_len = int(d.group(1))
-                src_in, src_out, rec_in, rec_out = [
-                    x.replace(';', ':') for x in d.groups()[1:]
-                ]
-                half = dissolve_len // 2
-                # Tag the outgoing clip (last stored event) with its dissolve tail length
-                if prev_stored is not None:
-                    prev_stored['dissolve_out'] = half
-                # Incoming clip event — src_in/rec_in are already at the dissolve start
+            if dissolve:
+                reel_name = dissolve.group(1)
+                dissolve_length = int(dissolve.group(2))
+                src_in, src_out, rec_in, rec_out = (
+                    value.replace(";", ":") for value in dissolve.groups()[2:]
+                )
+                half = dissolve_length // 2
+                if previous_stored is not None:
+                    previous_stored["dissolve_out"] = half
                 current = {
-                    'src_in':      src_in,
-                    'src_out':     src_out,
-                    'rec_in':      rec_in,
-                    'rec_out':     rec_out,
-                    'retime_fps':  None,
-                    'clip_name':   '',
-                    'dissolve_in': half,
+                    "reel_name": reel_name,
+                    "src_in": src_in,
+                    "src_out": src_out,
+                    "rec_in": rec_in,
+                    "rec_out": rec_out,
+                    "retime_fps": None,
+                    "clip_name": "",
+                    "dissolve_in": half,
                 }
                 events.append(current)
-                prev_stored = current
-                # An M2 after a dissolve can describe either side. Its source TC
-                # disambiguates the outgoing marker from the incoming D event.
+                previous_stored = current
                 m2_candidates.append((src_in, current))
                 m2_target = current
                 continue
 
-            # ── M2 (motion effect / retime) line ─────────────────────────────
-            # M2  REEL  FPS  SRC_TC
-            m2 = re.match(
-                r'^M2\s+\S+\s+([\d.]+)(?:\s+'
-                r'(\d{2}:\d{2}:\d{2}[:;]\d{2}))?',
-                line
+            motion = re.match(
+                r"^M2\s+\S+\s+([\d.]+)(?:\s+"
+                r"(\d{2}:\d{2}:\d{2}[:;]\d{2}))?",
+                line,
             )
-            if m2:
+            if motion:
                 target = m2_target
-                m2_src_tc = m2.group(2)
-                if m2_src_tc:
-                    m2_src_tc = m2_src_tc.replace(';', ':')
-                    # Prefer the incoming event if both sides happen to use the
-                    # same source TC; it is the event immediately before M2.
+                source_tc = motion.group(2)
+                if source_tc:
+                    source_tc = source_tc.replace(";", ":")
                     for candidate_tc, candidate in reversed(m2_candidates):
-                        if candidate is not None and candidate_tc == m2_src_tc:
+                        if candidate is not None and candidate_tc == source_tc:
                             target = candidate
                             break
                 if target is not None:
-                    target['retime_fps'] = float(m2.group(1))
+                    target["retime_fps"] = float(motion.group(1))
                 continue
 
-            # ── FROM CLIP NAME comment ────────────────────────────────────────
-            cn = re.match(r'^\*\s*FROM CLIP NAME:\s*(.+)', line)
-            if cn and current is not None:
-                current['clip_name'] = cn.group(1).strip()
+            from_name = re.match(r"^\*\s*FROM CLIP NAME:\s*(.+)", line)
+            if from_name and current is not None:
+                current["clip_name"] = from_name.group(1).strip()
                 continue
 
-            # ── TO CLIP NAME comment (dissolve incoming clip) ─────────────────
-            to_cn = re.match(r'^\*\s*TO CLIP NAME:\s*(.+)', line)
-            if to_cn and current is not None:
-                current['clip_name'] = to_cn.group(1).strip()
+            to_name = re.match(r"^\*\s*TO CLIP NAME:\s*(.+)", line)
+            if to_name and current is not None:
+                current["clip_name"] = to_name.group(1).strip()
 
     return events
 
@@ -529,7 +514,7 @@ class ShotListWorker(QThread):
             for track_num, edl_path in self.track_edl_map.items():
                 if edl_path and os.path.exists(edl_path):
                     self.log(f"Loading EDL for track {track_num}: {os.path.basename(edl_path)}")
-                    edl_by_track[track_num] = parse_edl(edl_path, fps_str)
+                    edl_by_track[track_num] = parse_edl(edl_path)
                 else:
                     edl_by_track[track_num] = {}
 
@@ -627,9 +612,12 @@ class ShotListWorker(QThread):
                         if elem_edl_event is None:
                             continue
 
-                        # Prefer the EDL clip_name — it's always the actual source file name.
-                        if elem_edl_event.get('clip_name'):
-                            reel = elem_edl_event['clip_name']
+                        reel = (
+                            elem_edl_event.get("reel_name")
+                            or elem_edl_event.get("clip_name")
+                            or mpi_props.get("File Name")
+                            or elem.GetName()
+                        )
 
                         if elem_start >= shot_start and elem_end <= shot_end:
 
