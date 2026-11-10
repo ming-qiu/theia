@@ -56,24 +56,6 @@ def safe_get(d, k, default=None):
         return default
 
 
-def transition_is_enveloped(transitions, elem_start, elem_end,
-                             shot_start, shot_end, edge):
-    """Return whether the frame counter contains the transition at a clip edge."""
-    boundary = elem_start if edge == "in" else elem_end
-    for transition in transitions:
-        trans_start = transition.GetStart(False)
-        trans_end = transition.GetEnd(False)
-        if edge == "in":
-            attached_to_edge = trans_start <= boundary < trans_end
-        else:
-            attached_to_edge = trans_start < boundary <= trans_end
-        if (attached_to_edge
-                and shot_start <= trans_start
-                and trans_end <= shot_end):
-            return True
-    return False
-
-
 def element_name_for_track(idx):
     if idx == 1:
         return "ScanBg"
@@ -108,6 +90,8 @@ def parse_edl(edl_path):
     m2_target = None
     m2_candidates = []
     previous_stored = None
+    pending_dissolve_out = None
+    zero_marker_seen = False
 
     with Path(edl_path).open("r", encoding="utf-8", errors="replace") as stream:
         for raw in stream:
@@ -139,10 +123,22 @@ def parse_edl(edl_path):
                     previous_stored = current
                     m2_target = current
                     m2_candidates = [(src_in, current)]
+                    pending_dissolve_out = None
+                    zero_marker_seen = False
                 else:
-                    m2_target = previous_stored
+                    zero_marker_seen = True
+                    marker_matches_previous = bool(
+                        previous_stored
+                        and reel_name == previous_stored.get("reel_name")
+                    )
+                    pending_dissolve_out = (
+                        previous_stored if marker_matches_previous else None
+                    )
+                    m2_target = pending_dissolve_out
                     m2_candidates = (
-                        [(src_in, previous_stored)] if previous_stored else []
+                        [(src_in, pending_dissolve_out)]
+                        if pending_dissolve_out is not None
+                        else []
                     )
                 continue
 
@@ -161,8 +157,11 @@ def parse_edl(edl_path):
                     value.replace(";", ":") for value in dissolve.groups()[2:]
                 )
                 half = dissolve_length // 2
-                if previous_stored is not None:
-                    previous_stored["dissolve_out"] = half
+                outgoing_event = (
+                    pending_dissolve_out if zero_marker_seen else previous_stored
+                )
+                if outgoing_event is not None:
+                    outgoing_event["dissolve_out"] = half
                 current = {
                     "reel_name": reel_name,
                     "src_in": src_in,
@@ -177,6 +176,8 @@ def parse_edl(edl_path):
                 previous_stored = current
                 m2_candidates.append((src_in, current))
                 m2_target = current
+                pending_dissolve_out = None
+                zero_marker_seen = False
                 continue
 
             motion = re.match(
@@ -209,29 +210,48 @@ def parse_edl(edl_path):
     return events
 
 
-def get_clip_tc_from_edl(timeline_item, fps, edl_event=None):
-    fps_str = fps_to_str(fps)
-    try:
-        src_in_frames  = Timecode(fps_str, edl_event['src_in']).frames - 1   # 0-indexed inclusive
-        src_out_frames = Timecode(fps_str, edl_event['src_out']).frames - 2  # EDL out is exclusive
-        rec_in_frames  = Timecode(fps_str, edl_event['rec_in']).frames - 1
-        rec_out_frames = Timecode(fps_str, edl_event['rec_out']).frames - 1
-        dur = rec_out_frames - rec_in_frames
+def timecode_to_frame(timecode: str, fps: float) -> int:
+    """Convert an EDL timecode to Resolve's zero-based absolute frame number."""
+    return Timecode(fps_to_str(fps), timecode).frames - 1
 
-        dissolve_out = edl_event.get('dissolve_out', 0)
-        if dissolve_out:
-            src_out_frames += dissolve_out * 2
-            rec_out_frames += dissolve_out * 2
-            dur            += dissolve_out * 2
-        return {
-            "ClipInTC":      repr(Timecode(fps_str, frames=max(1, src_in_frames + 1))),
-            "ClipInFrames":  src_in_frames,
-            "ClipOutTC":     repr(Timecode(fps_str, frames=max(1, src_out_frames + 1))),
-            "ClipOutFrames": src_out_frames,
-            "ClipDuration":  dur,
-        }
-    except Exception:
-        return read_clip_tc(timeline_item, fps)
+
+def edl_event_for_shot(event, fps, shot_start, shot_end):
+    """Select by the EDL's nominal cut range, retaining boundary dissolve handles.
+
+    CMX record in includes the incoming half-dissolve; record out excludes the
+    outgoing half. Use the cut centers for membership so a neighboring shot's
+    dissolve handle alone cannot create an extra element.
+    """
+    record_start = timecode_to_frame(event["rec_in"], fps)
+    record_end = timecode_to_frame(event["rec_out"], fps)
+    incoming = int(event.get("dissolve_in", 0) or 0)
+    outgoing = int(event.get("dissolve_out", 0) or 0)
+    cut_start = record_start + incoming
+    cut_end = record_end + outgoing
+    if cut_end <= shot_start or cut_start >= shot_end:
+        return None
+
+    # Trim an event spanning multiple shot codes, but keep dissolve handles at
+    # an event edge whose cut center falls within this shot.
+    start = record_start if shot_start <= cut_start else shot_start
+    end = record_end + outgoing * 2 if cut_end <= shot_end else shot_end
+    speed = (event["retime_fps"] / fps
+             if event.get("retime_fps") is not None else 1.0)
+    src_in = timecode_to_frame(event["src_in"], fps)
+    src_out = timecode_to_frame(event["src_out"], fps) - 1 + outgoing * 2
+    src_in += round((start - record_start) * speed)
+    if end < record_end + outgoing * 2:
+        src_out = src_in + round((end - start) * speed) - 1
+    return {
+        "TimelineStart": start,
+        "TimelineEnd": end,
+        "ClipInTC": repr(Timecode(fps_to_str(fps), frames=max(1, src_in + 1))),
+        "ClipOutTC": repr(Timecode(fps_to_str(fps), frames=max(1, src_out + 1))),
+        "ClipInFrames": src_in,
+        "ClipOutFrames": src_out,
+        "ClipDuration": end - start,
+    }
+
 
 def read_clip_tc(timeline_item, fps):
 
@@ -346,7 +366,6 @@ def retime_summary(elements_by_track, fps, scan_handle):
                         "TrackIndex": first["TrackIndex"],
                         "ShotCode": first["ShotCode"],
                         "ElementName": first["ElementName"],
-                        "TimelineItem": first["TimelineItem"],
                         "TimelineStart": first["TimelineStart"],
                         "TimelineEnd": last["TimelineEnd"],
                         "ClipIn": first["ClipIn"],
@@ -360,7 +379,6 @@ def retime_summary(elements_by_track, fps, scan_handle):
                         "ScaleRepo": first["ScaleRepo"],
                         "HasRetime": True,
                         "ReelName": reel,
-                        "Props": first["Props"],
                         "HeadIn": first["HeadIn"],
                         "TailOut": updated_tail_out,
                         "Speed": None,
@@ -516,7 +534,7 @@ class ShotListWorker(QThread):
                     self.log(f"Loading EDL for track {track_num}: {os.path.basename(edl_path)}")
                     edl_by_track[track_num] = parse_edl(edl_path)
                 else:
-                    edl_by_track[track_num] = {}
+                    edl_by_track[track_num] = []
 
             # Load old shot list Excel if provided
             old_shots_dict = None
@@ -534,35 +552,10 @@ class ShotListWorker(QThread):
             fc_items_sorted = sorted(fc_items, key=lambda c: c.GetStart(False))
             self.log(f"Found {len(fc_items_sorted)} frame counter clips on track {self.frame_counter_track}")
 
-            def lookup_edl_event(track_num, index):
-                event_list = edl_by_track.get(track_num, [])
-                if index < 0 or index >= len(event_list):
-                    return None
-                return event_list[index]
-
-            # Pre-pull video items for element tracks
-            element_labels = {i: element_name_for_track(i) for i in self.track_edl_map}
-
-            skip_tracks = {self.frame_counter_track}
-            element_tracks = sorted(k for k in self.track_edl_map if k not in skip_tracks)
-
-            track_items = {}
-            track_transitions = {}
-            # Resolve transition names — these appear as timeline items but are not clips
-            # and have no entry in the EDL. Extend this set if new transition types appear.
-            RESOLVE_TRANSITIONS = {
-                "Cross Dissolve", "Dip to Color Dissolve", "Film Dissolve",
-                "Smooth Cut", "Dip to Black", "Dip to White",
-            }
-
-            for i in element_tracks:
-                all_items = timeline.GetItemListInTrack("video", i) or []
-                track_transitions[i] = [
-                    it for it in all_items if it.GetName() in RESOLVE_TRANSITIONS
-                ]
-                # Exclude built-in transitions; keep all other items (clips, generators,
-                # placeholders) so index alignment with the EDL is preserved.
-                track_items[i] = [it for it in all_items if it.GetName() not in RESOLVE_TRANSITIONS]
+            # EDLs are the sole source of elements. Only frame-counter clips
+            # are read from Resolve; edits on the other tracks do not affect export.
+            element_tracks = sorted(k for k in edl_by_track if k != self.frame_counter_track)
+            element_labels = {i: element_name_for_track(i) for i in element_tracks}
 
             # Process each shot
             shots_rows = []
@@ -589,110 +582,55 @@ class ShotListWorker(QThread):
 
                 # Collect elements on [bottom..top] tracks
                 elements_by_track = defaultdict(list)
-                first_elem_in_shot = True
 
                 for track in element_tracks:
 
-                    for edl_idx, elem in enumerate(track_items.get(track) or []):
-                        elem_start = elem.GetStart(False)
-                        elem_end   = elem.GetEnd(False)
-
-                        # Skip disabled elems
-                        try:
-                            if not elem.GetClipEnabled():
-                                continue
-                        except Exception:
-                            pass
-
-                        mpi = elem.GetMediaPoolItem()
-                        mpi_props = (mpi.GetClipProperty() if mpi else {}) or {}
-                        reel = mpi_props["File Name"] if mpi_props != {} else elem.GetName()
-                        elem_edl_event = lookup_edl_event(track, edl_idx)
-
-                        if elem_edl_event is None:
+                    for elem_edl_event in edl_by_track[track]:
+                        tc_info = edl_event_for_shot(elem_edl_event, fps, shot_start, shot_end)
+                        if tc_info is None:
                             continue
+                        elem_start = tc_info["TimelineStart"]
+                        elem_end = tc_info["TimelineEnd"]
+                        reel = elem_edl_event.get("reel_name") or elem_edl_event.get("clip_name") or ""
+                        elem_dur = tc_info["ClipDuration"]
+                        elem_in = int(fc_tc_info['ClipInFrames'] + elem_start - shot_start)
+                        elem_out = int(elem_in + elem_dur - 1)
+                        cut_in = min(cut_in, elem_in)
+                        cut_out = max(cut_out, elem_out)
 
-                        reel = (
-                            elem_edl_event.get("reel_name")
-                            or elem_edl_event.get("clip_name")
-                            or mpi_props.get("File Name")
-                            or elem.GetName()
-                        )
+                        retime_fps = elem_edl_event.get('retime_fps')
+                        if retime_fps is not None:
+                            # CMX 3600: M2 fps = source frames per timeline second
+                            speed     = retime_fps / fps
+                            has_retime = abs(speed - 1.0) > 1e-3
+                        else:
+                            # No M2 line → definitively 100% speed
+                            speed      = 1.0
+                            has_retime = False
 
-                        if elem_start >= shot_start and elem_end <= shot_end:
-
-                            tc_info = get_clip_tc_from_edl(elem, fps, elem_edl_event)
-
-                            elem_dur = tc_info["ClipDuration"]
-                            elem_in = int(fc_tc_info['ClipInFrames'] + elem_start - shot_start)
-
-                            if "dissolve_in" in elem_edl_event:
-                                dissolve_is_enveloped = transition_is_enveloped(
-                                    track_transitions.get(track, []),
-                                    elem_start, elem_end, shot_start, shot_end, "in"
-                                )
-                                if dissolve_is_enveloped:
-                                    self.log(
-                                        f"  {reel}: incoming dissolve is inside the "
-                                        "frame counter; keeping Cut In unchanged"
-                                    )
-                                else:
-                                    if first_elem_in_shot:
-                                        elem_in -= elem_edl_event['dissolve_in']
-                                    cut_in -= elem_edl_event['dissolve_in']
-                            elem_out = int(elem_in + elem_dur - 1)
-
-                            if "dissolve_out" in elem_edl_event:
-                                dissolve_is_enveloped = transition_is_enveloped(
-                                    track_transitions.get(track, []),
-                                    elem_start, elem_end, shot_start, shot_end, "out"
-                                )
-                                if dissolve_is_enveloped:
-                                    self.log(
-                                        f"  {reel}: outgoing dissolve is inside the "
-                                        "frame counter; keeping Cut Out unchanged"
-                                    )
-                                else:
-                                    cut_out += elem_edl_event['dissolve_out']
-                            first_elem_in_shot = False
-
-                            retime_fps = elem_edl_event.get('retime_fps')
-                            if retime_fps is not None:
-                                # CMX 3600: M2 fps = source frames per timeline second
-                                speed     = retime_fps / fps
-                                has_retime = abs(speed - 1.0) > 1e-3
-                            else:
-                                # No M2 line → definitively 100% speed
-                                speed      = 1.0
-                                has_retime = False
-
-                            props = elem.GetProperty() or {}
-
-                            elements_by_track[track].append({
-                                "TrackIndex":    track,
-                                "ShotCode":      shot_code,
-                                "ElementName":   element_labels[track],
-                                "TimelineItem":  elem,
-                                "TimelineStart": elem_start,
-                                "TimelineEnd":   elem_end,
-                                "ClipIn":        elem_in,
-                                "ClipOut":       elem_out,
-                                "ClipInTC":      tc_info["ClipInTC"],
-                                "ClipOutTC":     tc_info["ClipOutTC"],
-                                "ClipInFrames":  tc_info["ClipInFrames"],
-                                "ClipOutFrames": tc_info["ClipOutFrames"],
-                                "ClipDuration":  elem_dur,
-                                "HasRetime":     has_retime,
-                                "Speed":         speed,
-                                "RetimeSummary": "",
-                                "RetimeFPS":     (fps * speed) if speed is not None else None,
-                                "ScaleRepo":     summarize_scale_repo(props),
-                                "ReelName":      reel,
-                                "Props":         props,
-                                "HeadIn":        int(elem_in  - self.scan_handle),
-                                "TailOut":       int(elem_out + self.scan_handle),
-                                "EDLEvent":      elem_edl_event,
-                            })
+                        elements_by_track[track].append({
+                            "TrackIndex":    track,
+                            "ShotCode":      shot_code,
+                            "ElementName":   element_labels[track],
+                            "TimelineStart": elem_start,
+                            "TimelineEnd":   elem_end,
+                            "ClipIn":        elem_in,
+                            "ClipOut":       elem_out,
+                            "ClipInTC":      tc_info["ClipInTC"],
+                            "ClipOutTC":     tc_info["ClipOutTC"],
+                            "ClipInFrames":  tc_info["ClipInFrames"],
+                            "ClipOutFrames": tc_info["ClipOutFrames"],
+                            "ClipDuration":  elem_dur,
+                            "HasRetime":     has_retime,
+                            "Speed":         speed,
+                            "RetimeSummary": "",
+                            "RetimeFPS":     (fps * speed) if speed is not None else None,
+                            "ScaleRepo":     "",  # CMX EDLs contain no transform properties.
+                            "ReelName":      reel,
+                            "HeadIn":        int(elem_in  - self.scan_handle),
+                            "TailOut":       int(elem_out + self.scan_handle),
+                            "EDLEvent":      elem_edl_event,
+                        })
 
                 # Shot metadata from BG elements (lowest element track)
                 bottom_track = element_tracks[0] if element_tracks else None
